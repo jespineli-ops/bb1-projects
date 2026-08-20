@@ -8,12 +8,11 @@
  *
  * Date        	  Author		        Purpose
  * 08/19/2026     Jared Espineli        Initial Version
- * 08/20/2026     Jared Espineli        Moved shared logic to bb1_qpg_tschd_report_lib
  *
  * Copyright (c) 2022 BlueBridge One Business Solutions, All Rights Reserved [Replace appropriately]
  * support@bluebridgeone.com, +44 (0)1932 300007
  */
-define(['N/currentRecord', './bb1_qpg_tschd_report_lib'],
+define(['N/currentRecord', './bb1_qpg_tschd_report_lib_helper'],
     /**
      * @param{currentRecord} currentRecordModule
      * @param{helperLib} helperLib
@@ -30,9 +29,6 @@ define(['N/currentRecord', './bb1_qpg_tschd_report_lib'],
          * @since 2015.2
          */
         const fieldChanged = (scriptContext) => {
-            // scriptContext.currentRecord isn't reliably a full Record object on Suitelet-
-            // rendered forms (it's missing getField() there), so pull it via N/currentRecord
-            // instead — the pattern NetSuite's own Suitelet dependent-dropdown examples use.
             const currentRecord = currentRecordModule.get();
             const {fieldId} = scriptContext;
 
@@ -54,9 +50,48 @@ define(['N/currentRecord', './bb1_qpg_tschd_report_lib'],
                     currentRecord, _FIELDS.FORM.FLOOR, _FIELDS.FLOOR.REC_ID,
                     _FIELDS.FLOOR.FILTERBY_BLOCK, blockIds
                 );
+
+                //clear values of the dependent fields from a block
+                helperLib.LIB_FX.clearFieldOptions(currentRecord, _FIELDS.FORM.UNIT);
+                return;
+            }
+
+            if (fieldId === _FIELDS.FORM.FLOOR) {
+                const floorIds = currentRecord.getValue({fieldId: _FIELDS.FORM.FLOOR});
+                helperLib.LIB_FX.populateChildOptions(
+                    currentRecord, _FIELDS.FORM.UNIT, _FIELDS.UNIT.REC_ID,
+                    _FIELDS.UNIT.FILTERBY_FLOOR, floorIds
+                );
             }
         }
 
-        return {fieldChanged}
+        /**
+         * Triggered by the "Print PDF" button. Re-requests the current Suitelet
+         * page with the selected filter values plus an action flag, so the
+         * server can generate the PDF instead of re-rendering the form. Opens
+         * in a new tab so the filter page itself is left untouched.
+         */
+        const printPdf = () => {
+            const currentRecord = currentRecordModule.get();
+            const params = new URLSearchParams(window.location.search);
+
+            _FIELDS.FILTER_FIELD_IDS.forEach((fieldId) => {
+                const value = currentRecord.getValue({fieldId: fieldId});
+                const isEmpty = value === null || value === '' || (Array.isArray(value) && !value.length);
+
+                if (isEmpty) {
+                    params.delete(fieldId);
+                    return;
+                }
+
+                params.set(fieldId, Array.isArray(value) ? value.join(',') : value);
+            });
+
+            params.set(_FIELDS.ACTION.PARAM, _FIELDS.ACTION.PRINT_PDF);
+
+            window.open(`${window.location.pathname}?${params.toString()}`, '_blank');
+        }
+
+        return {fieldChanged, printPdf}
 
     });
