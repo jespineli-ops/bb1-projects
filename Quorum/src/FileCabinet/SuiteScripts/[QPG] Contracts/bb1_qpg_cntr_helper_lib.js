@@ -97,8 +97,7 @@ define(['N/record', 'N/runtime', 'N/search', 'N/format'],
                 columns: searchDef.columns
             });
 
-            //shallow copy so this call's pushes build onto its own array, never mutating the cached base filters
-            //shared by every other call against this same saved search
+            //shallow copy so pushes below don't mutate the cached base filters shared by other calls
             let filterExpr = searchDef.filterExpression.slice();
 
             //fixedChrg: start date is within this month, or started earlier but still open/ongoing
@@ -168,8 +167,7 @@ define(['N/record', 'N/runtime', 'N/search', 'N/format'],
                 }
             }
 
-            //utilChrgAll: every utilised charge for this contract, regardless of date or invoice status -
-            //used to pull a contract's full uninvoiced set without needing a period bound
+            //utilChrgAll: every charge for this contract regardless of date/invoice status (full uninvoiced set)
             if(searchType === 'utilChrgAll' && idContract){
                 filterExpr.push('and', ['custrecord_bb1_utilised_lease', 'anyof', idContract]);
             }
@@ -207,23 +205,21 @@ define(['N/record', 'N/runtime', 'N/search', 'N/format'],
 
         }
 
-        /**
-         * adds charge lines in contract record
-         */
-
         //extracts the internal id from a list/record search result field, e.g. [{value, text}]
         LIB_FX.getListValue = (fieldValue) => (fieldValue && fieldValue.length > 0) ? fieldValue[0].value : '';
 
         //extracts the display text from a list/record search result field, e.g. [{value, text}]
         LIB_FX.getListText = (fieldValue) => (fieldValue && fieldValue.length > 0) ? fieldValue[0].text : '';
 
-        //static values for rent and parking
-        //skipFixedCharges is set to true for parking to limit charges from being added in this contract record
+        //rent/parking type ids - skipFixedCharges = true excludes fixed charges for that lease type (parking)
         const STATIC_CHARGE_CONFIG = {
-            RENT: {type: 3, skipFixedCharges: false},    //rent - fixed charges still apply
-            PARKING: {type: 5, skipFixedCharges: true}   //parking - fixed charges excluded
+            RENT: {type: 3, skipFixedCharges: false},
+            PARKING: {type: 5, skipFixedCharges: true}
         };
 
+        /**
+         * adds charge lines (fixed + static rent/parking) to the contract record for the given period
+         */
         LIB_FX.addChargeLines = (idContract, fixedCharges, contractValues, isManualRun, periodDate, idUtChargeSea) => {
             //values sourced from the contract's search row (moved here from the mr script's reduce stage)
             let idLeaseType = LIB_FX.getListValue(contractValues.custrecord_bb1_lease_type);
@@ -319,11 +315,9 @@ define(['N/record', 'N/runtime', 'N/search', 'N/format'],
         }
 
         /**
-         * adds one invoice line per utilised charge on the contract, plus a discount line where applicable.
-         * Rent/Parking charges (type 3/5) are skipped entirely for the main line - they already come over
-         * as the SO's own line via the transform, which is also what keeps this invoice showing under the
-         * SO's Related Records. Their discount line still gets added here though, since the SO's line never
-         * carries a discount amount. Every other charge type gets its own fresh line as normal.
+         * adds one invoice line per utilised charge, plus a discount line where applicable. Rent/Parking
+         * (type 3/5) skip the main line - they already came over as the SO's own line via the transform -
+         * but still get their discount line, since the SO's line never carries a discount amount.
          */
         const addChargeLinesToInvoice = (invoiceRec, sublistId, utilChargeList) => {
             let itemFields = _FIELDS.INVOICE.SUBLIST.ITEMS;
@@ -346,8 +340,7 @@ define(['N/record', 'N/runtime', 'N/search', 'N/format'],
                     invoiceRec.commitLine({sublistId: sublistId});
                 }
 
-                //if current charge has discount amount, add discount line after it - still needed for
-                //Rent/Parking even though their main line is skipped, since the SO carries no discount
+                //discount line - still needed for Rent/Parking, since the SO's own line carries no discount
                 let discountAmount = charge.getValue({name: chargeFields.DISCOUNT_AMOUNT});
                 if(discountAmount){
                     invoiceRec.selectNewLine({sublistId: sublistId});
@@ -363,12 +356,36 @@ define(['N/record', 'N/runtime', 'N/search', 'N/format'],
         }
 
         /**
-         * transforms the linked SO in the contract to an invoice - the SO's own Rent/Parking lines are kept
-         * as-is (addChargeLinesToInvoice skips them for the main line, only adding their discount line if
-         * any) so the invoice still carries the transform's order-linkage back to the SO; every other
-         * charge is added fresh
+         * finds the (monthly) accounting period whose start/end range contains the given date -
+         * excludes year and quarter periods so the exact month period is always the one returned
          */
-        LIB_FX.createInvoice = (idSalesOrder, utilChargeList) => {
+        LIB_FX.getAccountingPeriod = (date) => {
+            let strDate = format.format({value: date, type: format.Type.DATE});
+
+            let periodSearch = search.create({
+                type: 'accountingperiod',
+                filters: [
+                    ['startdate', 'onorbefore', strDate],
+                    'and',
+                    ['enddate', 'onorafter', strDate],
+                    'and',
+                    ['isyear', 'is', 'F'],
+                    'and',
+                    ['isquarter', 'is', 'F']
+                ],
+                columns: ['internalid']
+            });
+
+            let result = periodSearch.run().getRange({start: 0, end: 1});
+            return (result && result.length) ? result[0].getValue({name: 'internalid'}) : '';
+        }
+
+        /**
+         * transforms the linked SO into an invoice, keeping the SO's own Rent/Parking lines so the invoice
+         * still shows under the SO's Related Records; every other charge is added fresh. On a manual run,
+         * trandate/postingperiod are set to periodDate instead of defaulting to today.
+         */
+        LIB_FX.createInvoice = (idSalesOrder, utilChargeList, periodDate, isManualRun) => {
             let invoiceRec = record.transform({
                 fromType: record.Type.SALES_ORDER,
                 fromId: idSalesOrder,
@@ -378,8 +395,7 @@ define(['N/record', 'N/runtime', 'N/search', 'N/format'],
 
             let sublistId = _FIELDS.INVOICE.SUBLIST.ITEMS.ID;
 
-            //force quantity = 1 on the Rent/Parking line(s) carried over from the SO - everything else about
-            //them (item, rate, amount) is left exactly as the SO had it
+            //force quantity = 1 on the Rent/Parking line(s) carried over from the SO - item/rate/amount untouched
             let existingLineCount = invoiceRec.getLineCount({sublistId: sublistId});
             for(let line = 0; line < existingLineCount; line++){
                 invoiceRec.selectLine({sublistId: sublistId, line: line});
@@ -388,6 +404,18 @@ define(['N/record', 'N/runtime', 'N/search', 'N/format'],
             }
 
             addChargeLinesToInvoice(invoiceRec, sublistId, utilChargeList);
+
+            if(isManualRun && periodDate){
+                invoiceRec.setValue({fieldId: 'trandate', value: periodDate});
+
+                //fall back to the current period if periodDate has none set up yet, instead of leaving it unset
+                let idPeriod = LIB_FX.getAccountingPeriod(periodDate) || LIB_FX.getAccountingPeriod(new Date());
+                if(idPeriod){
+                    invoiceRec.setValue({fieldId: 'postingperiod', value: idPeriod});
+                } else {
+                    log.error('createInvoice', 'No accounting period found for date ' + periodDate + ' or current date');
+                }
+            }
 
             let idInvoice = invoiceRec.save();
             log.debug('createInvoice', 'Invoice ' + idInvoice + ' created from Sales Order ' + idSalesOrder);
@@ -413,8 +441,7 @@ define(['N/record', 'N/runtime', 'N/search', 'N/format'],
                         [chargeFields.STATUS]: 2,
                         [chargeFields.INVOICE]: idInvoice
                     },
-                    //neither field triggers dependent/sourced values on this record, so skip that server-side
-                    //work on every one of these calls - meaningful at 1000+ charges per run
+                    //skip sourcing/mandatory-field work - neither field needs it, meaningful at 1000+ charges/run
                     options: {
                         enableSourcing: false,
                         ignoreMandatoryFields: true
@@ -426,9 +453,8 @@ define(['N/record', 'N/runtime', 'N/search', 'N/format'],
         }
 
         /**
-         * attaches a sibling contract's utilised charges (e.g. a parking contract's) as new lines onto an
-         * invoice already resolved for the group - used when rent and parking contracts share one Sales
-         * Order and therefore must land on the same invoice, but only one of them actually creates it
+         * attaches a sibling contract's charges (e.g. parking) onto an invoice already resolved for the
+         * group - used when rent and parking share one SO and must land on the same invoice
          */
         LIB_FX.addChargesToInvoice = (idInvoice, utilChargeList) => {
             if(!utilChargeList || !utilChargeList.length){
@@ -452,17 +478,34 @@ define(['N/record', 'N/runtime', 'N/search', 'N/format'],
                 log.debug('addChargesToInvoice', 'Invoice ' + idInvoice + ' updated with ' + newCharges.length + ' new charge line(s)');
             }
 
-            //re-link the full group, including any duplicates - self-heals any charge whose own invoice
-            //field never got set despite already having a line on this invoice
+            //re-link the full group (including duplicates) - self-heals any charge missing its invoice link
             LIB_FX.updateUtilisedCharges(utilChargeList, idInvoice);
         }
 
+        //values for custrecord_bb1_utilised_status
+        const UTILISED_CHARGE_STATUS = {
+            BILLED: 2,
+            VOIDED: 3
+        };
+
         /**
-         * to check if there are new utilised charges
+         * true if the edit added at least one non-voided charge line - a new line that came in already
+         * voided shouldn't trigger the (expensive) invoice update MR
          */
         LIB_FX.hasNewUtilisedCharges = (oldContractRec, newContractRec) => {
-            let sublistId = _FIELDS.CONTRACT.SUBLIST.CHARGES.ID;
-            return newContractRec.getLineCount({sublistId: sublistId}) > oldContractRec.getLineCount({sublistId: sublistId});
+            let chargeFields = _FIELDS.CONTRACT.SUBLIST.CHARGES;
+            let sublistId = chargeFields.ID;
+            let oldCount = oldContractRec.getLineCount({sublistId: sublistId});
+            let newCount = newContractRec.getLineCount({sublistId: sublistId});
+
+            for(let line = oldCount; line < newCount; line++){
+                let status = newContractRec.getSublistValue({sublistId: sublistId, fieldId: chargeFields.STATUS, line: line});
+                if(String(status) !== String(UTILISED_CHARGE_STATUS.VOIDED)){
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         /**
@@ -491,13 +534,16 @@ define(['N/record', 'N/runtime', 'N/search', 'N/format'],
         }
 
         /**
-         * returns charges without invoices linked to it
+         * returns charges with no invoice linked yet, excluding voided charges
          */
         LIB_FX.checkUtilisedCharges = (utilChargeList, idContract) => {
             let chargeFields = _FIELDS.CONTRACT.SUBLIST.CHARGES;
-            let uninvoicedCharges = (utilChargeList || []).filter((charge) => !charge.getValue({name: chargeFields.INVOICE}));
+            let uninvoicedCharges = (utilChargeList || []).filter((charge) =>
+                !charge.getValue({name: chargeFields.INVOICE}) &&
+                String(charge.getValue({name: chargeFields.STATUS})) !== String(UTILISED_CHARGE_STATUS.VOIDED)
+            );
 
-            log.debug('checkUtilisedCharges', 'Contract ' + idContract + ' has ' + uninvoicedCharges.length + ' utilised charge(s) with no invoice linked');
+            log.debug('checkUtilisedCharges', 'Contract ' + idContract + ' has ' + uninvoicedCharges.length + ' non-voided utilised charge(s) with no invoice linked');
 
             return uninvoicedCharges;
         }
@@ -611,14 +657,11 @@ define(['N/record', 'N/runtime', 'N/search', 'N/format'],
         }
 
         /**
-         * for monthly invoice run which groups contract's under the same period
-         * check if group has an invoice to determine a new one must be created or an update must be made
-         *
-         * takes the FULL set of this contract's period charges (invoiced and uninvoiced alike), already
-         * fetched once by the caller, so the existing-invoice lookup can run off data already in hand
-         * instead of re-querying utilised charges a second time just to check for a prior invoice link
+         * groups a contract's period charges by month and, per group, creates a new invoice or adds to an
+         * existing one. Takes the FULL set of charges (invoiced + uninvoiced) so the existing-invoice
+         * lookup doesn't need a second query. periodDate/isManualRun only matter when creating a new invoice.
          */
-        LIB_FX.createOrUpdateInvoice = (idSalesOrder, periodCharges, idContract) => {
+        LIB_FX.createOrUpdateInvoice = (idSalesOrder, periodCharges, idContract, periodDate, isManualRun) => {
             if(!periodCharges || !periodCharges.length){
                 return '';
             }
@@ -634,9 +677,8 @@ define(['N/record', 'N/runtime', 'N/search', 'N/format'],
                     return; //everything in this period is already invoiced - nothing new to add
                 }
 
-                //look for an existing invoice against the FULL period group (invoiced + uninvoiced), not just
-                //the uninvoiced subset - self-heals any charge whose own invoice field never got set despite
-                //already having a line on this invoice
+                //look up an existing invoice against the FULL period group, not just the uninvoiced subset -
+                //self-heals any charge missing its invoice link despite already having a line on it
                 let chargeIds = allChargesForPeriod.map((charge) => charge.id);
                 let idExistingInvoice = LIB_FX.findInvoiceForCharges(chargeIds);
 
@@ -666,12 +708,11 @@ define(['N/record', 'N/runtime', 'N/search', 'N/format'],
                         log.debug('createOrUpdateInvoice', 'Invoice ' + idExistingInvoice + ' already existed for period ' + period + ' on contract ' + idContract + ' - added ' + newCharges.length + ' new charge line(s) instead of creating a new invoice');
                     }
 
-                    //re-link the full uninvoiced group, including the duplicates - self-heals any charge whose
-                    //own invoice field never got set despite already having a line on this invoice
+                    //re-link the full uninvoiced group (including duplicates) - same self-heal as above
                     LIB_FX.updateUtilisedCharges(uninvoicedCharges, idExistingInvoice);
                     idInvoice = idExistingInvoice;
                 } else {
-                    idInvoice = LIB_FX.createInvoice(idSalesOrder, uninvoicedCharges);
+                    idInvoice = LIB_FX.createInvoice(idSalesOrder, uninvoicedCharges, periodDate, isManualRun);
                 }
             });
 

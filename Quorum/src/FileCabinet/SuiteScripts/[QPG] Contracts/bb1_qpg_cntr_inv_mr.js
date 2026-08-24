@@ -30,11 +30,12 @@ define(['N/record', 'N/runtime', 'N/search', './bb1_qpg_cntr_helper_lib'],
                 //automatic monthly run and always means "the current month". Resolved once here, at the
                 //very start of the job (getInputData only ever runs once), and carried through map/reduce
                 //below so every reduce key uses the exact same month regardless of how long the job takes.
+                let isManualRun = !!periodDate;
                 let effectivePeriodDate = periodDate || new Date();
 
                 let activeContracts = helperLib.LIB_FX.searchData(idContractSea);
 
-                return activeContracts.map((row) => ({periodDate: effectivePeriodDate, row: row}));
+                return activeContracts.map((row) => ({periodDate: effectivePeriodDate, isManualRun: isManualRun, row: row}));
             }catch(e){
                 log.error('_getInput error', e.message);
             }
@@ -59,7 +60,7 @@ define(['N/record', 'N/runtime', 'N/search', './bb1_qpg_cntr_helper_lib'],
 
                 mapContext.write(
                     idSalesOrder,
-                    JSON.stringify({periodDate: mapData.periodDate, row: mapValue})
+                    JSON.stringify({periodDate: mapData.periodDate, isManualRun: mapData.isManualRun, row: mapValue})
                 )
             }catch(e){
                 log.error('_map error', e.message);
@@ -73,6 +74,7 @@ define(['N/record', 'N/runtime', 'N/search', './bb1_qpg_cntr_helper_lib'],
 
                 let entries = reduceContext.values.map((strValue) => JSON.parse(strValue));
                 let periodDate = new Date(entries[0].periodDate); //resolved once in getInputData - identical for every entry in this job
+                let isManualRun = !!entries[0].isManualRun; //true only when this job was triggered with an explicit INV_PERIOD
                 let contracts = entries.map((entry) => entry.row);
 
                 //get utilised for the current period being processed (monthly or date specific if manually triggered)
@@ -94,7 +96,7 @@ define(['N/record', 'N/runtime', 'N/search', './bb1_qpg_cntr_helper_lib'],
                     }
 
                     if(!idInvoice){
-                        idInvoice = helperLib.LIB_FX.createOrUpdateInvoice(idSalesOrder, periodCharges, value.id);
+                        idInvoice = helperLib.LIB_FX.createOrUpdateInvoice(idSalesOrder, periodCharges, value.id, periodDate, isManualRun);
                     } else {
                         helperLib.LIB_FX.addChargesToInvoice(idInvoice, uninvoicedCharges);
                     }
