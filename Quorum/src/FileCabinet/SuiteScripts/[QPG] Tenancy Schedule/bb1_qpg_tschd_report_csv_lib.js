@@ -7,24 +7,26 @@
  *
  * Date        	  Author		        Purpose
  * 08/24/2026     Jared Espineli        Initial version - Export CSV button
+ * 08/26/2026     Jared Espineli        Sources real data via bb1_qpg_tschd_report_data_lib (getFlatRows), matching the PDF's columns
+ * 08/26/2026     Jared Espineli        Amount columns are now fixed to exactly 2 decimal places
  *
  * Copyright (c) 2022 BlueBridge One Business Solutions, All Rights Reserved [Replace appropriately]
  * support@bluebridgeone.com, +44 (0)1932 300007
  */
-define(['N/file', './bb1_qpg_tschd_report_lib_helper'],
+define(['N/file', './bb1_qpg_tschd_report_lib_helper', './bb1_qpg_tschd_report_data_lib'],
     /**
      * @param{file} file
      * @param{helperLib} helperLib
+     * @param{dataLib} dataLib
      */
-    (file, helperLib) => {
+    (file, helperLib, dataLib) => {
 
         const _FIELDS = helperLib._FIELDS;
 
-        // Column headers, left to right - shared with the PDF export so both
-        // outputs mirror each other's layout.
+        // Column headers, shared with the PDF export
         const COLUMNS = helperLib.COLUMNS;
 
-        //File Cabinet folder where files will be esaved
+        // File Cabinet folder where exported CSVs are saved
         const EXPORT_FOLDER_ID = 1541;
 
         const LIB_FX = {};
@@ -36,9 +38,18 @@ define(['N/file', './bb1_qpg_tschd_report_lib_helper'],
 
         const csvRow = (values) => values.map(csvField).join(',');
 
-        // Title row's "Tenancy Schedule as of <date>" text sits in the middle
-        // column of the Review..Rent Esc% range (columns 7-11, 1-indexed) so
-        // it reads centered above the data table.
+        // Money columns - kept as plain numbers with exactly 2 decimals (no
+        // thousands separator/symbol) so they stay usable as numbers in Excel/Sheets
+        const AMOUNT_COLUMNS = ['Current Rent', 'Rent Rate', 'Amount', 'Rate', 'Gross Income', 'Gross Rate', 'Budget Rate'];
+        const AMOUNT_COLUMN_INDEXES = new Set(AMOUNT_COLUMNS.map((label) => COLUMNS.indexOf(label)));
+
+        const formatDataRow = (values) => values.map((value, index) => {
+            if (!AMOUNT_COLUMN_INDEXES.has(index) || value === null || value === undefined || value === '') return value;
+            const num = Number(value);
+            return isNaN(num) ? value : num.toFixed(2);
+        });
+
+        // Column the title/printed text sits in, so it reads centered above the table
         const TITLE_COLUMN_INDEX = 8;
 
         LIB_FX.buildCsv = (params) => {
@@ -55,15 +66,16 @@ define(['N/file', './bb1_qpg_tschd_report_lib_helper'],
             const printedRow = COLUMNS.map(() => '');
             printedRow[TITLE_COLUMN_INDEX] = `Printed: ${printedText}`;
 
-            // Mirrors the PDF's header block, property row, column header row
-            // and (currently placeholder) data row.
+            const dataRows = dataLib.LIB_FX.getFlatRows().map(formatDataRow);
+
+            // Title/printed rows, column headers, then the flat data rows -
+            // no Property row, no Accommodation Type subtotal rows.
             const rows = [
                 titleRow,
                 printedRow,
                 [],
-                ['Property'],
                 COLUMNS,
-                COLUMNS.map(() => '')
+                ...dataRows
             ];
 
             const contents = rows.map(csvRow).join('\n');

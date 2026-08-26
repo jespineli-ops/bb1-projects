@@ -3,9 +3,9 @@
  * @NModuleScope SameAccount
  *
  * Project: Quorum Tenancy Schedule - P102843 Quorum NetSuite Implementation
- * Server-only helper library for building the Tenancy Schedule Suitelet form.
- * Kept separate from bb1_qpg_tschd_report_lib_helper.js because it depends on the
- * server-only N/ui/serverWidget module, which the client script must not load.
+ * Server-only library that builds the Tenancy Schedule Suitelet form. Kept
+ * separate from bb1_qpg_tschd_report_lib_helper.js since it uses the
+ * server-only N/ui/serverWidget module, which the client script can't load.
  *
  * Date        	  Author		        Purpose
  * 08/20/2026     Jared Espineli        Initial version
@@ -34,15 +34,11 @@ define(['N/ui/serverWidget', './bb1_qpg_tschd_report_lib_helper'],
 
         const LIB_FX = {};
 
-        /**
-         * handles the form design and builds
-         */
+        // Builds the Tenancy Schedule Suitelet form
         LIB_FX.buildForm = () => {
             const form = serverWidget.createForm({title: 'Tenancy Schedule Report'});
 
-            // Cascading filter behavior (Building -> Block -> Floor) lives in the client
-            // script, mirroring the custom segment "filtered by" hierarchy configured on
-            // those segments.
+            // Cascading filters (Building -> Block -> Floor) are handled in the client script
             form.clientScriptModulePath = './bb1_qpg_tschd_report_cs.js';
 
             form.addField({
@@ -59,7 +55,8 @@ define(['N/ui/serverWidget', './bb1_qpg_tschd_report_lib_helper'],
 
             form.addButton({
                 id: _FIELDS.FORM.EXPORT_CSV,
-                label: 'Export CSV'
+                label: 'Export CSV',
+                functionName: 'exportCsv'
             });
 
             // Left column

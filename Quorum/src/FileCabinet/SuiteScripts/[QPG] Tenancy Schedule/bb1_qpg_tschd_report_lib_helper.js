@@ -3,14 +3,12 @@
  * @NModuleScope SameAccount
  *
  * Project: Quorum Tenancy Schedule - P102843 Quorum NetSuite Implementation
- * Shared helper library (field ids + cascading filter helpers) used by both the
- * Tenancy Schedule Suitelet and its client script.
+ * Shared library (field ids + cascading filter helpers) used by both the
+ * Suitelet and its client script.
  *
  * Date        	  Author		        Purpose
  * 08/20/2026     Jared Espineli        Initial Version
- * 08/20/2026     Jared Espineli        Split out server-only form building to fix
- *                                      client script load error (N/ui/serverWidget
- *                                      is unavailable client-side)
+ * 08/24/2026     Jared Espineli        Added Export CSV action
  *
  * Copyright (c) 2022 BlueBridge One Business Solutions, All Rights Reserved [Replace appropriately]
  * support@bluebridgeone.com, +44 (0)1932 300007
@@ -20,6 +18,19 @@ define(['N/search'],
      * @param{search} search
      */
     (search) => {
+
+        //Column headers in both CSV and PDF files
+        const COLUMNS = [
+            'Premises', 'Area', 'Units / Parking', 'Tenant', 'Starts', 'Expires',
+            'Review', 'Months Option', 'Current Rent', 'Rent Rate', 'Rent Esc%',
+            'Other Chargings', 'Description', 'Amount', 'Rate', 'Gross Income',
+            'Gross Rate', 'Budget Rate'
+        ];
+
+        const MONTH_NAMES = [
+            'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+            'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+        ];
 
         // field/button ids used on the Suitelet form itself
         const _FIELDS = {
@@ -52,8 +63,7 @@ define(['N/search'],
             }
         }
 
-        // the report's filter fields - forwarded from the client script to the
-        // Suitelet whenever a report output (PDF/CSV) is requested
+       //UI fields
         _FIELDS.FILTER_FIELD_IDS = [
             _FIELDS.FORM.PROPERTY_PORTFOLIO,
             _FIELDS.FORM.BUILDING,
@@ -64,26 +74,57 @@ define(['N/search'],
             _FIELDS.FORM.AS_OF_DATE
         ];
 
-        // request parameter that tells the Suitelet which output to generate
+        //button actions
         _FIELDS.ACTION = {
             PARAM: 'custpage_qpg_action',
-            PRINT_PDF: 'printpdf'
+            PRINT_PDF: 'printpdf',
+            EXPORT_CSV: 'exportcsv'
         };
 
         const LIB_FX = {};
 
-        /**
-         * clears the value in a multi select field
-         */
+        const pad2 = (n) => String(n).padStart(2, '0');
+
+        //formatting of As of Date value
+        LIB_FX.formatAsOfDate = (date) =>
+            `${pad2(date.getDate())} ${MONTH_NAMES[date.getMonth()]} ${date.getFullYear()}`;
+
+        //formatting of the printed date time value
+        LIB_FX.formatPrintedTimestamp = (date) => {
+            const datePart = `${pad2(date.getDate())}/${pad2(date.getMonth() + 1)}/${date.getFullYear()}`;
+            const timePart = `${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())}`;
+            return `${datePart} ${timePart}`;
+        }
+
+        // Builds the URL for the Print PDF/Export CSV buttons: current filter
+        // values plus an action flag. Client-side only (uses window.location).
+        LIB_FX.buildReportUrl = (currentRecord, action) => {
+            const params = new URLSearchParams(window.location.search);
+
+            _FIELDS.FILTER_FIELD_IDS.forEach((fieldId) => {
+                const value = currentRecord.getValue({fieldId: fieldId});
+                const isEmpty = value === null || value === '' || (Array.isArray(value) && !value.length);
+
+                if (isEmpty) {
+                    params.delete(fieldId);
+                    return;
+                }
+
+                params.set(fieldId, Array.isArray(value) ? value.join(',') : value);
+            });
+
+            params.set(_FIELDS.ACTION.PARAM, action);
+
+            return `${window.location.pathname}?${params.toString()}`;
+        }
+
+        // Clears a multi-select field's value and options
         LIB_FX.clearFieldOptions = (currentRecord, fieldId) => {
             currentRecord.setValue({fieldId: fieldId, value: [], ignoreFieldChange: true});
             currentRecord.getField({fieldId: fieldId}).removeSelectOption({value: null});
         }
 
-        /**
-         * Searches for child records of a parent record type, and populates the
-         * multi-select field with the child records' names.'
-         */
+        // Populates a multi-select field with the child records of the given parent ids
         LIB_FX.populateChildOptions = (currentRecord, fieldId, recordType, filterFieldId, parentIds) => {
             LIB_FX.clearFieldOptions(currentRecord, fieldId);
 
@@ -105,5 +146,5 @@ define(['N/search'],
             });
         }
 
-        return {LIB_FX, _FIELDS};
+        return {LIB_FX, _FIELDS, COLUMNS};
     });

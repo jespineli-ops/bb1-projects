@@ -8,6 +8,7 @@
  *
  * Date        	  Author		        Purpose
  * 08/19/2026     Jared Espineli        Initial Version
+ * 08/24/2026     Jared Espineli        Added Export CSV button handling
  *
  * Copyright (c) 2022 BlueBridge One Business Solutions, All Rights Reserved [Replace appropriately]
  * support@bluebridgeone.com, +44 (0)1932 300007
@@ -66,32 +67,23 @@ define(['N/currentRecord', './bb1_qpg_tschd_report_lib_helper'],
         }
 
         /**
-         * Triggered by the "Print PDF" button. Re-requests the current Suitelet
-         * page with the selected filter values plus an action flag, so the
-         * server can generate the PDF instead of re-rendering the form. Opens
-         * in a new tab so the filter page itself is left untouched.
+         * Function called when Print PDF button has been clicked
          */
         const printPdf = () => {
             const currentRecord = currentRecordModule.get();
-            const params = new URLSearchParams(window.location.search);
-
-            _FIELDS.FILTER_FIELD_IDS.forEach((fieldId) => {
-                const value = currentRecord.getValue({fieldId: fieldId});
-                const isEmpty = value === null || value === '' || (Array.isArray(value) && !value.length);
-
-                if (isEmpty) {
-                    params.delete(fieldId);
-                    return;
-                }
-
-                params.set(fieldId, Array.isArray(value) ? value.join(',') : value);
-            });
-
-            params.set(_FIELDS.ACTION.PARAM, _FIELDS.ACTION.PRINT_PDF);
-
-            window.open(`${window.location.pathname}?${params.toString()}`, '_blank');
+            const url = helperLib.LIB_FX.buildReportUrl(currentRecord, _FIELDS.ACTION.PRINT_PDF);
+            window.open(url, '_blank');
         }
 
-        return {fieldChanged, printPdf}
+        /**
+         * Function called when Export CSV button has been clicked
+         */
+        const exportCsv = () => {
+            const currentRecord = currentRecordModule.get();
+            const url = helperLib.LIB_FX.buildReportUrl(currentRecord, _FIELDS.ACTION.EXPORT_CSV);
+            window.open(url, '_blank');
+        }
+
+        return {fieldChanged, printPdf, exportCsv}
 
     });

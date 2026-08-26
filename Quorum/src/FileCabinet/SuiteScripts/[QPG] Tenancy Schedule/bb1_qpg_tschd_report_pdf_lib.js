@@ -6,50 +6,32 @@
  * Server-only helper library that builds the Tenancy Schedule PDF.
  *
  * Date        	  Author		        Purpose
- * 08/21/2026     Jared Espineli        Initial version - header/logo/column
- *                                      scaffold, no data sourcing yet
+ * 08/21/2026     Jared Espineli        Initial version - header/logo/column scaffold
+ * 08/25/2026     Jared Espineli        Data rows sourced from the workbook query
+ * 08/26/2026     Jared Espineli        Added bold Accommodation Type subtotal rows with formatted numbers
+ * 08/26/2026     Jared Espineli        Added thin vertical borders between columns
+ * 08/26/2026     Jared Espineli        Removed grid lines between detail rows/columns to match reference printout
+ * 08/26/2026     Jared Espineli        Removed Current Occupied Area note; boxed Property to its own columns only
+ * 08/26/2026     Jared Espineli        Property is now its own table above the main table; total row's top border scoped to Tenant-Budget Rate
  *
  * Copyright (c) 2022 BlueBridge One Business Solutions, All Rights Reserved [Replace appropriately]
  * support@bluebridgeone.com, +44 (0)1932 300007
  */
-define(['N/render', './bb1_qpg_tschd_report_lib_helper'],
+define(['N/render', './bb1_qpg_tschd_report_lib_helper', './bb1_qpg_tschd_report_data_lib'],
     /**
      * @param{render} render
      * @param{helperLib} helperLib
+     * @param{dataLib} dataLib
      */
-    (render, helperLib) => {
+    (render, helperLib, dataLib) => {
 
         const _FIELDS = helperLib._FIELDS;
+        // Column headers, shared with the CSV export
+        const COLUMNS = helperLib.COLUMNS;
 
         const LOGO_URL = 'https://11536405.app.netsuite.com/core/media/media.nl?id=4007&c=11536405&h=vMOQpihs6u5R5MQswLAA1sZ5a8h-LvBnXfGPuCx39bSKx6gU';
 
-        // Column headers, left to right - mirrors the reference PDF's layout.
-        const COLUMNS = [
-            'Premises', 'Area', 'Units / Parking', 'Tenant', 'Starts', 'Expires',
-            'Review', 'Months Option', 'Current Rent', 'Rent Rate', 'Rent Esc%',
-            'Other Chargings', 'Description', 'Amount', 'Rate', 'Gross Income',
-            'Gross Rate', 'Market Rate', 'Market Esc%'
-        ];
-
-        const MONTH_NAMES = [
-            'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-            'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
-        ];
-
         const LIB_FX = {};
-
-        const pad2 = (n) => String(n).padStart(2, '0');
-
-        //formatting of As of Date value
-        const formatAsOfDate = (date) =>
-            `${pad2(date.getDate())} ${MONTH_NAMES[date.getMonth()]} ${date.getFullYear()}`;
-
-        //formatting of the printed date time value
-        const formatPrintedTimestamp = (date) => {
-            const datePart = `${pad2(date.getDate())}/${pad2(date.getMonth() + 1)}/${date.getFullYear()}`;
-            const timePart = `${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())}`;
-            return `${datePart} ${timePart}`;
-        }
 
         const escapeXml = (value) => String(value)
             .replace(/&/g, '&amp;')
@@ -60,8 +42,8 @@ define(['N/render', './bb1_qpg_tschd_report_lib_helper'],
 
         const buildHeaderMacro = (asOfDate) => {
             const logoCell = `<img src="${escapeXml(LOGO_URL)}" alt="Company Logo" style="height: 70pt; width: 200pt;" />`;
-            const printedText = escapeXml(formatPrintedTimestamp(new Date()));
-            const asOfDateText = escapeXml(formatAsOfDate(asOfDate));
+            const printedText = escapeXml(helperLib.LIB_FX.formatPrintedTimestamp(new Date()));
+            const asOfDateText = escapeXml(helperLib.LIB_FX.formatAsOfDate(asOfDate));
 
             return `
                 <macro id="header">
@@ -96,12 +78,91 @@ define(['N/render', './bb1_qpg_tschd_report_lib_helper'],
             return COLUMNS.map((label) => `<th align="left">${label}</th>`).join('');
         }
 
-        const buildPropertyRow = () => {
-            const remainingColumns = COLUMNS.length - 4;
-            return `
-                <td colspan="5">Property</td>
-                <td colspan="${remainingColumns}" style="border: none;"></td>
-            `;
+        // Small table with just the "Property" label, placed above the main table
+        const buildPropertyTable = () => `
+            <table class="tschd-property-table">
+                <tr><td>Property</td></tr>
+            </table>
+        `;
+
+        // Columns shown with thousands separators and 2 decimals
+        const NUMERIC_COLUMNS = [
+            'Area', 'Current Rent', 'Rent Rate', 'Rent Esc%', 'Amount', 'Rate',
+            'Gross Income', 'Gross Rate', 'Budget Rate'
+        ];
+        const NUMERIC_COLUMN_INDEXES = new Set(NUMERIC_COLUMNS.map((label) => COLUMNS.indexOf(label)));
+
+        const PREMISES_COLUMN_INDEX = COLUMNS.indexOf('Premises');
+        const AREA_COLUMN_INDEX = COLUMNS.indexOf('Area');
+        const TENANT_COLUMN_INDEX = COLUMNS.indexOf('Tenant');
+        const CURRENT_RENT_COLUMN_INDEX = COLUMNS.indexOf('Current Rent');
+        const RENT_RATE_COLUMN_INDEX = COLUMNS.indexOf('Rent Rate');
+        const AMOUNT_COLUMN_INDEX = COLUMNS.indexOf('Amount');
+        const RATE_COLUMN_INDEX = COLUMNS.indexOf('Rate');
+        const GROSS_INCOME_COLUMN_INDEX = COLUMNS.indexOf('Gross Income');
+        const GROSS_RATE_COLUMN_INDEX = COLUMNS.indexOf('Gross Rate');
+
+        const formatAmount = (value) => {
+            if (value === null || value === undefined || value === '') return '';
+            const num = Number(value);
+            return isNaN(num) ? String(value) : num.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+        }
+
+        // Renders one row's <td> cells. borderTop/borderBottom box off the
+        // total row; borderTopFromIndex skips the top border on the first
+        // few columns (Premises/Area/Units-Parking).
+        const buildRowCells = (values, options) => {
+            const bold = options && options.bold;
+            const borderTop = options && options.borderTop;
+            const borderTopFromIndex = (options && options.borderTopFromIndex) || 0;
+            const borderBottom = options && options.borderBottom;
+
+            return values.map((value, index) => {
+                const display = NUMERIC_COLUMN_INDEXES.has(index) ? formatAmount(value) : (value === null || value === undefined ? '' : value);
+
+                const styleParts = [];
+                if (bold) styleParts.push('font-weight: bold;');
+                if (borderTop && index >= borderTopFromIndex) styleParts.push('border-top: 0.5pt solid #000000;');
+                if (borderBottom) styleParts.push('border-bottom: 0.5pt solid #000000;');
+                const style = styleParts.length ? ` style="${styleParts.join(' ')}"` : '';
+
+                return `<td${style}>${escapeXml(display)}</td>`;
+            }).join('');
+        }
+
+        // Builds one Accommodation Type's total row values, in COLUMNS order
+        const buildTotalRowValues = (group) => {
+            const values = COLUMNS.map(() => '');
+            values[PREMISES_COLUMN_INDEX] = group.accommodationType;
+            values[AREA_COLUMN_INDEX] = group.totals.area;
+            values[CURRENT_RENT_COLUMN_INDEX] = group.totals.currentRent;
+            values[RENT_RATE_COLUMN_INDEX] = group.totals.rentRate;
+            values[AMOUNT_COLUMN_INDEX] = group.totals.amount;
+            values[RATE_COLUMN_INDEX] = group.totals.rate;
+            values[GROSS_INCOME_COLUMN_INDEX] = group.totals.grossIncome;
+            values[GROSS_RATE_COLUMN_INDEX] = group.totals.grossRate;
+            return values;
+        }
+
+        // Each Accommodation Type prints its total row first, then its units' charge rows
+        const buildDataRows = () => {
+            const groups = dataLib.LIB_FX.getAccommodationGroups();
+
+            if (!groups.length) {
+                return `
+                    <tr>
+                        <td colspan="${COLUMNS.length}" style="text-align: center; font-style: italic; color: #666666;">
+                            No records found
+                        </td>
+                    </tr>
+                `;
+            }
+
+            return groups.map((group) => {
+                const totalRow = `<tr>${buildRowCells(buildTotalRowValues(group), {bold: true, borderTop: true, borderTopFromIndex: TENANT_COLUMN_INDEX, borderBottom: true})}</tr>`;
+                const detailRows = group.rows.map((row) => `<tr>${buildRowCells(row)}</tr>`).join('');
+                return totalRow + detailRows;
+            }).join('');
         }
 
         LIB_FX.buildPdf = (params) => {
@@ -119,37 +180,50 @@ define(['N/render', './bb1_qpg_tschd_report_lib_helper'],
                         </macrolist>
                         <style>
                             * { font-family: Arial, Helvetica, sans-serif; }
-                            table.tschd-table { font-size: 6pt; width: 100%; border-collapse: collapse; }
+                            table.tschd-property-table {
+                                font-size: 6pt;
+                                width: 17%;
+                                border-collapse: collapse;
+                                margin: 0;
+                            }
+                            table.tschd-property-table td {
+                                padding: 3pt;
+                                border: 0.5pt solid #000000;
+                            }
+                            table.tschd-table {
+                                font-size: 6pt;
+                                width: 100%;
+                                border-collapse: collapse;
+                                border: 0.5pt solid #000000;
+                                margin: 0;
+                            }
                             table.tschd-table th {
                                 background-color: #FFF9C4;
                                 color: #000000;
                                 font-weight: bold;
                                 padding: 3pt;
-                                border: 1pt solid #000000;
+                                border-bottom: 0.5pt solid #000000;
+                                border-right: 0.5pt solid #000000;
                                 text-align: right;
                             }
                             table.tschd-table td {
                                 padding: 3pt;
-                                border: 1pt solid #666666;
+                                border-right: 0.5pt solid #000000;
                             }
                         </style>
                     </head>
                     <body header="header" header-height="70pt" size="A4-landscape" padding="0.4in 0.3in 0.4in 0.3in">
+                        ${buildPropertyTable()}
                         <table class="tschd-table">
-                            <tr>${buildPropertyRow()}</tr>
                             <tr>${buildColumnHeaderRow()}</tr>
-                            <tr>
-                                <td colspan="${COLUMNS.length}" style="text-align: center; font-style: italic; color: #666666;">                                    
-                                </td>
-                            </tr>
+                            ${buildDataRows()}
                         </table>
                     </body>
                 </pdf>
             `;
 
-            // The <?xml ?> declaration must be the very first characters in the
-            // string - the template literal's leading newline/indentation would
-            // otherwise make the parser reject it.
+            // xml.trim() strips the leading newline/indentation so <?xml ?> is the first character
+
             return render.xmlToPdf({xmlString: xml.trim()});
         }
 
