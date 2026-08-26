@@ -69,6 +69,8 @@ define(['N/record', 'N/runtime', 'N/search', './bb1_qpg_cntr_helper_lib'],
 
                     //call search function to get all fixed charges for the current month
                     let fixedCharges = helperLib.LIB_FX.searchData(idFxChargeSea, 'fixedChrg', periodDate, idBuilding);
+                    log.debug('fixedCharges', fixedCharges);
+
 
                     helperLib.LIB_FX.addChargeLines(idContract, fixedCharges, value.values, isManualRun, periodDate, idUtChargeSea);
                 })

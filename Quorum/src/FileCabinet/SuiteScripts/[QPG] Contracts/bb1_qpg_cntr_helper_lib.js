@@ -50,7 +50,9 @@ define(['N/record', 'N/runtime', 'N/search', 'N/format'],
                         ITEM:               'custrecord_bb1_utlised_item',
                         STATUS:             'custrecord_bb1_utilised_status',
                         INVOICE:            'custrecord_bb1_utilised_invoice',
-                        DISCOUNT_AMOUNT:    'custrecord_bb1_utilised_discount_amount'
+                        DISCOUNT_AMOUNT:    'custrecord_bb1_utilised_discount_amount',
+                        TAX_AMT:            'custrecord_bb1_utilited_tax_amount',
+                        AMOUNT_INC_TAX:     'custrecord_bb1_utilised_amt_inclusiv_vat'
                     }
                 }
             },
@@ -217,6 +219,34 @@ define(['N/record', 'N/runtime', 'N/search', 'N/format'],
             PARKING: {type: 5, skipFixedCharges: true}
         };
 
+        //VAT rate applied to a fixed charge's rate ex vat, keyed by the tax schedule set on the charge's item record
+        const TAX_RATE_BY_SCHEDULE = {
+            'STD': 0.15,
+            'ZERO RATE TAX': 0,
+            'ACCOMMODATION 9%': 0.09
+        };
+
+        //fixed charge's item tax schedule join column - drives TAX_AMT/AMOUNT_INC_TAX on the fixed charge line
+        const FIXED_ITEM_TAX_SCHEDULE_COLUMN = {name: 'taxschedule', join: 'custrecord_bb1_fixed_item'};
+
+        //join value for the lease item field in the contract record
+        const LEASE_ITEM_TAX_SCHEDULE_KEY = 'CUSTRECORD_BB1_LEASE_ITEM.taxschedule';
+
+        //looks up the VAT rate for a tax schedule label and returns the tax amount / rate-inclusive-of-vat for it
+        const computeTax = (taxSchedule, rateExVat, context) => {
+            let taxRate = TAX_RATE_BY_SCHEDULE[taxSchedule];
+
+            if(taxRate === undefined){
+                log.error('computeTax', 'unrecognised tax schedule "' + taxSchedule + '"' + (context ? ' on ' + context : '') + ' - defaulting to 0% tax');
+                taxRate = 0;
+            }
+
+            return {
+                taxAmt: rateExVat * taxRate,
+                amountIncVat: rateExVat * (1 + taxRate)
+            };
+        }
+
         /**
          * adds charge lines (fixed + static rent/parking) to the contract record for the given period
          */
@@ -270,7 +300,7 @@ define(['N/record', 'N/runtime', 'N/search', 'N/format'],
                 skipFixedCharges: staticConfig.skipFixedCharges
             } : null;
 
-            //sking adding charge lines if contract type = parking
+            //skip adding charge lines if contract type = parking
             if(!staticCharge || !staticCharge.skipFixedCharges){
                 for(let i = 0; i < fixedCharges.length; i++){
                     let charge = fixedCharges[i];
@@ -280,13 +310,18 @@ define(['N/record', 'N/runtime', 'N/search', 'N/format'],
                         continue;
                     }
 
+                    let rateExVat = parseFloat(charge.getValue({name: 'custrecord_bb1_fixed_rate'})) || 0;
+                    let chargeTax = computeTax(charge.getText(FIXED_ITEM_TAX_SCHEDULE_COLUMN), rateExVat, 'fixed charge ' + charge.id);
+
                     addLine({
                         [chargeFields.FX_CHRG_TYE]: charge.id,
                         [chargeFields.DESC]: charge.getValue({name: 'name'}),
-                        [chargeFields.RATE_EX_VAT]: charge.getValue({name: 'custrecord_bb1_fixed_rate'}),
+                        [chargeFields.RATE_EX_VAT]: rateExVat,
                         [chargeFields.UTIL_DATE]: utilDate,
                         [chargeFields.TYPE]: 1, //type = fixed charge
-                        [chargeFields.ITEM]: charge.getValue({name: 'custrecord_bb1_fixed_item'})
+                        [chargeFields.ITEM]: charge.getValue({name: 'custrecord_bb1_fixed_item'}),
+                        [chargeFields.TAX_AMT]: chargeTax.taxAmt,
+                        [chargeFields.AMOUNT_INC_TAX]: chargeTax.amountIncVat
                     });
                 }
             }
@@ -301,12 +336,17 @@ define(['N/record', 'N/runtime', 'N/search', 'N/format'],
             let escalatedRentAmount = isMonthtoMonth ? rentAmount + (rentAmount * escalationRate) : rentAmount;
 
             if(staticCharge && !staticChargeExists){
+                let rentTaxSchedule = LIB_FX.getListText(contractValues[LEASE_ITEM_TAX_SCHEDULE_KEY]);
+                let rentTax = computeTax(rentTaxSchedule, escalatedRentAmount, 'lease item ' + rentItem);
+
                 addLine({
                     [chargeFields.DESC]: rentItemText,
                     [chargeFields.ITEM]: rentItem,
                     [chargeFields.RATE_EX_VAT]: escalatedRentAmount,
                     [chargeFields.UTIL_DATE]: utilDate,
-                    [chargeFields.TYPE]: staticCharge.type
+                    [chargeFields.TYPE]: staticCharge.type,
+                    [chargeFields.TAX_AMT]: rentTax.taxAmt,
+                    [chargeFields.AMOUNT_INC_TAX]: rentTax.amountIncVat
                 });
             }
 
