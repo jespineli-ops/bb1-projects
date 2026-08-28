@@ -20,23 +20,30 @@
  * 08/27/2026     Jared Espineli        Data rows now driven by the Suitelet's Portfolio/Building/Block/Floor/Unit/Accommodation Type filters
  * 08/27/2026     Jared Espineli        Total Vacancy/Total Occupancy rows now computed (were blank placeholders)
  * 08/28/2026     Jared Espineli        Totals rows' Units/Parking column now mirrors their Area column, rounded to a whole number
+ * 08/28/2026     Jared Espineli        As of Date now drives per-row lease activity too (was Vacancy/Occupancy totals only) -
+ *                                      a unit whose lease isn't active as of that date reads as vacant on its own row. As of
+ *                                      Date is now parsed with dataLib's DD/MM/YYYY-aware parser instead of plain new Date()
+ * 08/28/2026     Jared Espineli        Updated header logo image
+ * 08/28/2026     Jared Espineli        Added N/log module (was referenced without being required, throwing ReferenceError
+ *                                      and breaking Print PDF entirely)
  *
  * Copyright (c) 2022 BlueBridge One Business Solutions, All Rights Reserved [Replace appropriately]
  * support@bluebridgeone.com, +44 (0)1932 300007
  */
-define(['N/render', './bb1_qpg_tschd_report_lib_helper', './bb1_qpg_tschd_report_data_lib'],
+define(['N/render', 'N/log', './bb1_qpg_tschd_report_lib_helper', './bb1_qpg_tschd_report_data_lib'],
     /**
      * @param{render} render
+     * @param{log} log
      * @param{helperLib} helperLib
      * @param{dataLib} dataLib
      */
-    (render, helperLib, dataLib) => {
+    (render, log, helperLib, dataLib) => {
 
         const _FIELDS = helperLib._FIELDS;
         // Column headers, shared with the CSV export
         const COLUMNS = helperLib.COLUMNS;
 
-        const LOGO_URL = 'https://11536405.app.netsuite.com/core/media/media.nl?id=4007&c=11536405&h=vMOQpihs6u5R5MQswLAA1sZ5a8h-LvBnXfGPuCx39bSKx6gU';
+        const LOGO_URL = 'https://11536405.app.netsuite.com/core/media/media.nl?id=5938&c=11536405&h=o2lyIWhKdtb1Pjd2xEoKj_QwbZPiBE_YLqECGFCBBI2rNiTs';
 
         const LIB_FX = {};
 
@@ -205,8 +212,8 @@ define(['N/render', './bb1_qpg_tschd_report_lib_helper', './bb1_qpg_tschd_report
         // Total Occupancy block (not bold), a boxed blank row, then a bold
         // Grand Totals/Total Vacancy/Total Occupancy block, then another
         // boxed blank row.
-        const buildDataRows = (filters) => {
-            const groups = dataLib.LIB_FX.getAccommodationGroups(filters);
+        const buildDataRows = (filters, asOfDate) => {
+            const groups = dataLib.LIB_FX.getAccommodationGroups(filters, asOfDate);
 
             if (!groups.length) {
                 return `
@@ -247,8 +254,8 @@ define(['N/render', './bb1_qpg_tschd_report_lib_helper', './bb1_qpg_tschd_report
 
         LIB_FX.buildPdf = (params) => {
             const asOfDateParam = params && params[_FIELDS.FORM.AS_OF_DATE];
-            const parsedAsOfDate = asOfDateParam ? new Date(asOfDateParam) : null;
-            const asOfDate = (parsedAsOfDate && !isNaN(parsedAsOfDate.getTime())) ? parsedAsOfDate : new Date();
+            log.debug('asOfDateParam', asOfDateParam);
+            const asOfDate = dataLib.LIB_FX.toDateOnly(asOfDateParam) || new Date();
             const filters = helperLib.LIB_FX.getFiltersFromParams(params);
 
             const xml = `
@@ -297,7 +304,7 @@ define(['N/render', './bb1_qpg_tschd_report_lib_helper', './bb1_qpg_tschd_report
                         ${buildPropertyTable()}
                         <table class="tschd-table">
                             <tr>${buildColumnHeaderRow()}</tr>
-                            ${buildDataRows(filters)}
+                            ${buildDataRows(filters, asOfDate)}
                         </table>
                     </body>
                 </pdf>

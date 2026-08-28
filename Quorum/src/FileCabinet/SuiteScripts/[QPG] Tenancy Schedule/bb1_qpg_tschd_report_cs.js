@@ -9,6 +9,9 @@
  * Date        	  Author		        Purpose
  * 08/19/2026     Jared Espineli        Initial Version
  * 08/24/2026     Jared Espineli        Added Export CSV button handling
+ * 08/28/2026     Jared Espineli        Print PDF/Export CSV now alert and stop if a required field (As of Date) is blank
+ * 08/28/2026     Jared Espineli        Swapped N/ui/dialogs for window.alert - N/ui/dialogs isn't available on
+ *                                      Suitelet-rendered pages (only on standard record forms) and failed to load
  *
  * Copyright (c) 2022 BlueBridge One Business Solutions, All Rights Reserved [Replace appropriately]
  * support@bluebridgeone.com, +44 (0)1932 300007
@@ -21,6 +24,20 @@ define(['N/currentRecord', './bb1_qpg_tschd_report_lib_helper'],
     (currentRecordModule, helperLib) => {
 
         const _FIELDS = helperLib._FIELDS;
+
+        // Alerts and returns true when a required field is blank, so callers can
+        // bail out before generating the report. Returns false when all good.
+        const blockOnMissingRequiredFields = (currentRecord) => {
+            const missingLabels = helperLib.LIB_FX.getMissingRequiredFields(currentRecord);
+
+            if (!missingLabels.length) {
+                return false;
+            }
+
+            window.alert(`Please fill in the following required field(s) before continuing: ${missingLabels.join(', ')}.`);
+
+            return true;
+        }
 
         /**
          * Function to be executed when field is changed.
@@ -71,6 +88,8 @@ define(['N/currentRecord', './bb1_qpg_tschd_report_lib_helper'],
          */
         const printPdf = () => {
             const currentRecord = currentRecordModule.get();
+            if (blockOnMissingRequiredFields(currentRecord)) return;
+
             const url = helperLib.LIB_FX.buildReportUrl(currentRecord, _FIELDS.ACTION.PRINT_PDF);
             window.open(url, '_blank');
         }
@@ -80,6 +99,8 @@ define(['N/currentRecord', './bb1_qpg_tschd_report_lib_helper'],
          */
         const exportCsv = () => {
             const currentRecord = currentRecordModule.get();
+            if (blockOnMissingRequiredFields(currentRecord)) return;
+
             const url = helperLib.LIB_FX.buildReportUrl(currentRecord, _FIELDS.ACTION.EXPORT_CSV);
             window.open(url, '_blank');
         }

@@ -23,6 +23,15 @@
  *                                      lease was reading as expired/dateless, so every unit showed as vacant)
  * 08/28/2026     Jared Espineli        Replaced getFlatRows() with getCsvRows(), sourced from the updated CSV workbook
  *                                      query (buildCsvQuery) - raw data, one row per Unit, charge-line amounts summed
+ * 08/28/2026     Jared Espineli        As of Date now drives per-row lease activity in both getAccommodationGroups (PDF)
+ *                                      and getCsvRows (CSV), not just the Vacancy/Occupancy totals - a unit whose lease
+ *                                      isn't active as of that date reads as vacant. toDateOnly exposed via LIB_FX so the
+ *                                      PDF/CSV builders parse the As of Date param with the same DD/MM/YYYY-aware logic
+ * 08/28/2026     Jared Espineli        isLeaseActive now also checks the Starts Date isn't in the future relative to the
+ *                                      As of Date - a lease active = Starts <= As of Date AND (no Expires OR As of Date < Expires)
+ * 08/28/2026     Jared Espineli        buildCsvQuery updated for 3 new workbook columns - custrecord_bb1_lease_future,
+ *                                      the tenant's entityid and custentity_bb1_group_tenant - CSV export only, per updated
+ *                                      workbook query
  *
  * Copyright (c) 2022 BlueBridge One Business Solutions, All Rights Reserved [Replace appropriately]
  * support@bluebridgeone.com, +44 (0)1932 300007
@@ -76,6 +85,14 @@ define(['N/query'],
             'custrecord_bb1_unit_budget_rate'
         ];
 
+        // ROW_COLUMNS entries that come from the Lease/Tenant/Utilised
+        // Charge join, not the Unit record itself. When a unit's lease
+        // isn't active as of the As of Date (see isLeaseActive below), these
+        // are blanked so the unit reads as vacant for that date - only
+        // Premises/Area/Units-Parking/Budget Rate (Unit-level fields) stay.
+        const LEASE_DERIVED_COLUMNS = ROW_COLUMNS.filter((column) =>
+            !['name', 'custrecord_bb1_unit_counter', 'name_1', 'custrecord_bb1_unit_budget_rate'].includes(column));
+
         // CSV export columns, in the order they're printed - one query field
         // per CSV column, per the updated workbook (see buildCsvQuery). Type/
         // Description are deliberately excluded: they're per-charge-line text
@@ -86,7 +103,8 @@ define(['N/query'],
             'custrecord_bb1_unit_counter', 'custrecord_bb1_unit_area', 'custrecord_bb1_unit_status',
             'custrecord_bb1_building_portfolio', 'custrecord_bb1_unit_accommodation_type', 'name_1',
             'formula_6', 'cseg_bb1_bed', 'name_2',
-            'fullname', 'email', 'phone', 'addressbookaddress', 'addr1_1', 'addr2_1', 'zip_1', 'city_1',
+            'custrecord_bb1_lease_future', 'entityid',
+            'fullname', 'custentity_bb1_group_tenant', 'email', 'phone', 'addressbookaddress', 'addr1_1', 'addr2_1', 'zip_1', 'city_1',
             'dropdownstate_1', 'country_1',
             'custrecord_bb1_lease_start_date', 'custrecord_bb1_lease_end_date', 'custrecord_bb1_lease_review_date',
             'custrecord_bb1_lease_opt_months', 'custrecord_bb1_lease_rent_escalation',
@@ -106,6 +124,21 @@ define(['N/query'],
             'custrecord_bb1_utilised_rate_ex_vat', 'formula_5', 'custrecord_bb1_utilised_amt_inclusiv_vat',
             'formula_3', 'formula_4'
         ]);
+
+        // CSV_ROW_COLUMNS entries that come from the Unit/Building record
+        // itself, not the Lease/Tenant/Utilised Charge join - these stay on
+        // the row regardless of whether the unit's lease is active as of
+        // the As of Date. Everything else in CSV_ROW_COLUMNS is lease-
+        // derived and gets blanked when the lease isn't active (formula_6,
+        // the Occupancy column, is handled separately - see getCsvRows).
+        const CSV_UNIT_LEVEL_COLUMNS = new Set([
+            'name', 'addr1', 'addr2', 'zip', 'city', 'dropdownstate', 'country',
+            'custrecord_bb1_unit_counter', 'custrecord_bb1_unit_area', 'custrecord_bb1_unit_status',
+            'custrecord_bb1_building_portfolio', 'custrecord_bb1_unit_accommodation_type', 'name_1',
+            'custrecord_bb1_unit_budget_rate'
+        ]);
+        const CSV_LEASE_DERIVED_COLUMNS = CSV_ROW_COLUMNS.filter((column) =>
+            column !== 'formula_6' && !CSV_UNIT_LEVEL_COLUMNS.has(column));
 
         // Builds an "AND <column> IN (?, ?, ...)" fragment for a filter's id
         // list and pushes those ids onto params in the same order. Must be
@@ -315,7 +348,10 @@ define(['N/query'],
                   NVL2(BUILTIN.DF(CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_lease_tenant), 'Occupied', 'Vacant') AS formula_6,
                   CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.cseg_bb1_bed AS cseg_bb1_bed,
                   CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.name AS name_2,
+                  CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_lease_future AS custrecord_bb1_lease_future,
+                  CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.entityid_0 AS entityid,
                   CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.fullname_0 AS fullname,
+                  CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custentity_bb1_group_tenant_0 AS custentity_bb1_group_tenant,
                   CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.email_0 AS email,
                   CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.phone_0 AS phone,
                   CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.addressbookaddress_0_0 AS addressbookaddress,
@@ -347,7 +383,10 @@ define(['N/query'],
                     CUSTOMRECORD_BB1_LEASE_CONTRACT.custrecord_bb1_lease_tenant AS custrecord_bb1_lease_tenant,
                     CUSTOMRECORD_BB1_LEASE_CONTRACT.cseg_bb1_bed AS cseg_bb1_bed,
                     CUSTOMRECORD_BB1_LEASE_CONTRACT.name AS name,
+                    CUSTOMRECORD_BB1_LEASE_CONTRACT.custrecord_bb1_lease_future AS custrecord_bb1_lease_future,
+                    Customer_SUB.entityid AS entityid_0,
                     Customer_SUB.fullname AS fullname_0,
+                    Customer_SUB.custentity_bb1_group_tenant AS custentity_bb1_group_tenant_0,
                     Customer_SUB.email AS email_0,
                     Customer_SUB.phone AS phone_0,
                     Customer_SUB.addressbookaddress_0 AS addressbookaddress_0_0,
@@ -371,7 +410,9 @@ define(['N/query'],
                     (SELECT
                       Customer."ID" AS "ID",
                       Customer."ID" AS id_join,
+                      Customer.entityid AS entityid,
                       Customer.fullname AS fullname,
+                      Customer.custentity_bb1_group_tenant AS custentity_bb1_group_tenant,
                       Customer.email AS email,
                       Customer.phone AS phone,
                       customerAddressbook_SUB.addressbookaddress AS addressbookaddress_0,
@@ -553,8 +594,17 @@ define(['N/query'],
         // Date. Parse DD/MM/YYYY explicitly instead of trusting new Date().
         const DATE_DMY_PATTERN = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/;
 
-        // Strips the time portion off a date value (SuiteQL date string or
-        // Date), for date-only comparisons. Returns null if unparseable.
+        // The Suitelet's As of Date param arrives as "YYYY-MM-DD" (see
+        // buildReportUrl in lib_helper.js - sent this way specifically to
+        // avoid timezone ambiguity). Parsed explicitly here too: plain
+        // `new Date("YYYY-MM-DD")` treats that shape as UTC midnight, which
+        // - once broken back into Y/M/D using this runtime's local
+        // timezone - can land on the wrong calendar day.
+        const DATE_YMD_PATTERN = /^(\d{4})-(\d{1,2})-(\d{1,2})$/;
+
+        // Strips the time portion off a date value (SuiteQL date string,
+        // the As of Date param, or a Date), for date-only comparisons.
+        // Returns null if unparseable.
         const toDateOnly = (value) => {
             if (value === null || value === undefined || value === '') return null;
 
@@ -562,7 +612,9 @@ define(['N/query'],
                 return isNaN(value.getTime()) ? null : new Date(value.getFullYear(), value.getMonth(), value.getDate());
             }
 
-            const dmyMatch = DATE_DMY_PATTERN.exec(String(value).trim());
+            const text = String(value).trim();
+
+            const dmyMatch = DATE_DMY_PATTERN.exec(text);
             if (dmyMatch) {
                 const day = Number(dmyMatch[1]);
                 const month = Number(dmyMatch[2]);
@@ -571,20 +623,39 @@ define(['N/query'],
                 return isNaN(date.getTime()) ? null : date;
             }
 
-            // fallback for any other shape (e.g. ISO strings)
-            const date = new Date(value);
+            const ymdMatch = DATE_YMD_PATTERN.exec(text);
+            if (ymdMatch) {
+                const year = Number(ymdMatch[1]);
+                const month = Number(ymdMatch[2]);
+                const day = Number(ymdMatch[3]);
+                const date = new Date(year, month - 1, day);
+                return isNaN(date.getTime()) ? null : date;
+            }
+
+            // fallback for any other shape
+            const date = new Date(text);
             return isNaN(date.getTime()) ? null : new Date(date.getFullYear(), date.getMonth(), date.getDate());
         }
 
+        // Exposed so the PDF/CSV builders can parse the Suitelet's As of
+        // Date param with the same DD/MM/YYYY-aware logic as the lease
+        // dates - it's the same account-formatted date string shape, so the
+        // same MM/DD/YYYY misparse risk applies if parsed with plain
+        // `new Date(...)`. Returns null if unparseable/empty.
+        LIB_FX.toDateOnly = toDateOnly;
+
         const roundTo2 = (num) => Math.round(num * 100) / 100;
 
-        // A unit's lease is "active" as of a given date when today is before
-        // the lease's Expires Date, OR there's no Expires Date but there IS
-        // a Starts Date (open-ended/month-to-month lease with no end).
+        // A unit's lease is "active" as of a given date when its Starts Date
+        // exists and isn't in the future relative to that date, AND either
+        // there's no Expires Date (open-ended/month-to-month lease with no
+        // end) or that date is before the Expires Date.
         const isLeaseActive = (startDateValue, endDateValue, asOfDate) => {
+            const start = toDateOnly(startDateValue);
+            if (!start || start.getTime() > asOfDate.getTime()) return false;
+
             const end = toDateOnly(endDateValue);
-            if (end) return asOfDate.getTime() < end.getTime();
-            return !!toDateOnly(startDateValue);
+            return !end || asOfDate.getTime() < end.getTime();
         }
 
         // Turns one query row into a plain array, in ROW_COLUMNS order.
@@ -609,12 +680,21 @@ define(['N/query'],
          * first charge line, since it's identical across all of a unit's
          * charge lines (Unit/Lease/Tenant-level data, not charge-level).
          *
+         * As of Date drives the same active-lease check as the PDF (see
+         * getAccommodationGroups): when a unit's lease isn't active as of
+         * that date, its CSV_LEASE_DERIVED_COLUMNS (Tenant/Starts/Expires/
+         * amounts/etc.) are blanked and its Occupancy column (formula_6)
+         * reads 'Vacant', overriding the workbook's own Occupied/Vacant
+         * value (which only checks whether a Tenant exists, not dates).
+         *
          * @param {Object} [filters] see buildQuery
+         * @param {Date} [asOfDate] date to evaluate lease activity against - defaults to today
          * Returns: [ [...CSV_ROW_COLUMNS order values...], ... ]
          */
-        LIB_FX.getCsvRows = (filters) => {
+        LIB_FX.getCsvRows = (filters, asOfDate) => {
             const {sql, params} = buildCsvQuery(filters);
             const rows = query.runSuiteQL({query: sql, params: params}).asMappedResults();
+            const referenceDate = toDateOnly(asOfDate) || toDateOnly(new Date());
 
             const unitOrder = [];
             const unitsById = new Map();
@@ -631,8 +711,15 @@ define(['N/query'],
             return unitOrder.map((unitId) => {
                 const unitRows = unitsById.get(unitId);
                 const firstRow = unitRows[0];
+                const hasActiveLease = isLeaseActive(
+                    firstRow.custrecord_bb1_lease_start_date, firstRow.custrecord_bb1_lease_end_date, referenceDate);
 
                 return CSV_ROW_COLUMNS.map((column) => {
+                    if (!hasActiveLease) {
+                        if (column === 'formula_6') return 'Vacant';
+                        if (CSV_LEASE_DERIVED_COLUMNS.includes(column)) return '';
+                    }
+
                     if (!CSV_SUM_COLUMNS.has(column)) {
                         const value = firstRow[column];
                         return value === null || value === undefined ? '' : value;
@@ -661,18 +748,24 @@ define(['N/query'],
          * occupied units' area counts as "Occupied Area", which Rent
          * Rate/Rate/Gross Rate divide by instead of the type's full area.
          *
-         * A unit "has an active lease contract" when today is before its
-         * lease's Expires Date, or there's no Expires Date but there is a
-         * Starts Date. This drives the Total Vacancy/Occupancy figures
-         * (see getPropertyTotals) - it's independent of the "occupied"
-         * flag above, which is based on there being a Current Rent charge.
+         * A unit "has an active lease contract" as of the As of Date when
+         * its Starts Date isn't in the future relative to that date, AND
+         * either there's no Expires Date or that date is before the Expires
+         * Date (see isLeaseActive). This drives the Total Vacancy/Occupancy
+         * figures (see getPropertyTotals) AND the row
+         * data itself: a unit whose lease isn't active as of the As of Date
+         * reads as vacant on the report - its lease-derived columns
+         * (LEASE_DERIVED_COLUMNS) are blanked and its charge rows collapse
+         * to one row, so it no longer contributes to Current Rent/Amount/
+         * Gross Income and no longer counts as "occupied" above either.
          *
          * @param {Object} [filters] see buildQuery
+         * @param {Date} [asOfDate] date to evaluate lease activity against - defaults to today
          * Returns: [{ accommodationType, totals: {...}, rows: [[...], ...] }]
          */
-        LIB_FX.getAccommodationGroups = (filters) => {
+        LIB_FX.getAccommodationGroups = (filters, asOfDate) => {
             const rows = runQuery(filters);
-            const referenceDate = toDateOnly(new Date());
+            const referenceDate = toDateOnly(asOfDate) || toDateOnly(new Date());
 
             // group rows by unit, keeping the order they came back in
             const unitOrder = [];
@@ -725,10 +818,25 @@ define(['N/query'],
                     }
                 });
 
+                unit.hasActiveLease = isLeaseActive(leaseStartDate, leaseEndDate, referenceDate);
+
+                if (!unit.hasActiveLease) {
+                    // Reads as vacant for this As of Date: collapse to a
+                    // single row and blank every lease-derived column -
+                    // showing multiple near-duplicate blank charge rows
+                    // would serve no purpose once there's nothing to show.
+                    unit.rows = [unit.rows[0]];
+                    LEASE_DERIVED_COLUMNS.forEach((column) => {
+                        unit.rows[0][column] = null;
+                    });
+                    currentRent = null;
+                    amountSum = 0;
+                    hasCharge = false;
+                }
+
                 unit.occupied = currentRent !== null;
                 unit.currentRent = currentRent || 0;
                 unit.amountSum = amountSum;
-                unit.hasActiveLease = isLeaseActive(leaseStartDate, leaseEndDate, referenceDate);
 
                 const grossIncome = (currentRent !== null || hasCharge) ? (currentRent || 0) + amountSum : null;
                 unit.grossIncome = grossIncome || 0;

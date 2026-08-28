@@ -13,6 +13,12 @@
  * 08/28/2026     Jared Espineli        Rebuilt around the updated CSV workbook (data lib's getCsvRows/CSV_ROW_COLUMNS) - raw
  *                                      data, one row per Unit, own column set (Building/Tenant address, Occupancy, Bed, etc.),
  *                                      no longer shares COLUMNS with the PDF. Title/printed rows unchanged.
+ * 08/28/2026     Jared Espineli        As of Date now drives per-row lease activity, same as the PDF - a unit whose lease
+ *                                      isn't active as of that date reads as vacant on its row. As of Date is now parsed
+ *                                      with dataLib's DD/MM/YYYY-aware parser instead of plain new Date()
+ * 08/28/2026     Jared Espineli        Added 3 new columns from the updated workbook - Future Lease, Tenant ID, Group Tenant
+ * 08/28/2026     Jared Espineli        Merged the title row and printed-timestamp row into a single title row (was two
+ *                                      separate rows, read as two titles)
  *
  * Copyright (c) 2022 BlueBridge One Business Solutions, All Rights Reserved [Replace appropriately]
  * support@bluebridgeone.com, +44 (0)1932 300007
@@ -35,7 +41,8 @@ define(['N/file', './bb1_qpg_tschd_report_lib_helper', './bb1_qpg_tschd_report_d
             'Building State', 'Building Country',
             'Unit Counter', 'Unit Area', 'Unit Status', 'Property Portfolio', 'Accommodation Type', 'Unit',
             'Occupancy', 'Bed', 'Lease',
-            'Tenant', 'Tenant Email', 'Tenant Phone', 'Tenant Address', 'Tenant Address 1', 'Tenant Address 2',
+            'Future Lease', 'Tenant ID',
+            'Tenant', 'Group Tenant', 'Tenant Email', 'Tenant Phone', 'Tenant Address', 'Tenant Address 1', 'Tenant Address 2',
             'Tenant Zip', 'Tenant City', 'Tenant State', 'Tenant Country',
             'Starts', 'Expires', 'Review', 'Months Option', 'Rent Esc%',
             'Current Rent', 'Rent Rate', 'Rate Area Excl VAT', 'Amount', 'Rate', 'Amount Incl VAT',
@@ -49,7 +56,7 @@ define(['N/file', './bb1_qpg_tschd_report_lib_helper', './bb1_qpg_tschd_report_d
 
         const csvField = (value) => {
             const text = value === null || value === undefined ? '' : String(value);
-            return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+        return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
         }
 
         const csvRow = (values) => values.map(csvField).join(',');
@@ -73,27 +80,22 @@ define(['N/file', './bb1_qpg_tschd_report_lib_helper', './bb1_qpg_tschd_report_d
 
         LIB_FX.buildCsv = (params) => {
             const asOfDateParam = params && params[_FIELDS.FORM.AS_OF_DATE];
-            const parsedAsOfDate = asOfDateParam ? new Date(asOfDateParam) : null;
-            const asOfDate = (parsedAsOfDate && !isNaN(parsedAsOfDate.getTime())) ? parsedAsOfDate : new Date();
+            const asOfDate = dataLib.LIB_FX.toDateOnly(asOfDateParam) || new Date();
 
             const asOfDateText = helperLib.LIB_FX.formatAsOfDate(asOfDate);
             const printedText = helperLib.LIB_FX.formatPrintedTimestamp(new Date());
             const filters = helperLib.LIB_FX.getFiltersFromParams(params);
 
             const titleRow = COLUMNS.map(() => '');
-            titleRow[TITLE_COLUMN_INDEX] = `Tenancy Schedule as of ${asOfDateText}`;
+            titleRow[TITLE_COLUMN_INDEX] = `Tenancy Schedule as of ${asOfDateText} - Printed: ${printedText}`;
 
-            const printedRow = COLUMNS.map(() => '');
-            printedRow[TITLE_COLUMN_INDEX] = `Printed: ${printedText}`;
+            const dataRows = dataLib.LIB_FX.getCsvRows(filters, asOfDate).map(formatDataRow);
 
-            const dataRows = dataLib.LIB_FX.getCsvRows(filters).map(formatDataRow);
-
-            // Title/printed rows, column headers, then the raw data rows -
-            // one row per Unit, no Property row, no Accommodation Type
-            // subtotal rows.
+            // Single title row (as of date + printed timestamp), then a
+            // blank row, column headers, then the raw data rows - one row
+            // per Unit, no Property row, no Accommodation Type subtotal rows.
             const rows = [
                 titleRow,
-                printedRow,
                 [],
                 COLUMNS,
                 ...dataRows

@@ -10,6 +10,11 @@
  * 08/20/2026     Jared Espineli        Initial Version
  * 08/24/2026     Jared Espineli        Added Export CSV action
  * 08/27/2026     Jared Espineli        Added getFiltersFromParams() to turn the Suitelet's request params into the data lib's filter lists
+ * 08/28/2026     Jared Espineli        Fixed As of Date shifting by a day on the report: buildReportUrl now sends DATE
+ *                                      fields' local Y/M/D as "YYYY-MM-DD" instead of the Date object's full
+ *                                      toString()/timezone text, which re-parsed to the wrong calendar day server-side
+ * 08/28/2026     Jared Espineli        Added getMissingRequiredFields() so the client script can block Print PDF/
+ *                                      Export CSV and alert the user when a required field (As of Date) is blank
  *
  * Copyright (c) 2022 BlueBridge One Business Solutions, All Rights Reserved [Replace appropriately]
  * support@bluebridgeone.com, +44 (0)1932 300007
@@ -75,6 +80,16 @@ define(['N/search'],
             _FIELDS.FORM.AS_OF_DATE
         ];
 
+        // Form fields that must have a value before a report can be generated
+        _FIELDS.REQUIRED_FIELD_IDS = [
+            _FIELDS.FORM.AS_OF_DATE
+        ];
+
+        // Human-readable labels for required field ids, used in the missing-fields alert
+        _FIELDS.FIELD_LABELS = {
+            [_FIELDS.FORM.AS_OF_DATE]: 'As of Date'
+        };
+
         //button actions
         _FIELDS.ACTION = {
             PARAM: 'custpage_qpg_action',
@@ -111,6 +126,21 @@ define(['N/search'],
                     return;
                 }
 
+                if (value instanceof Date) {
+                    // As of Date - getValue() on a DATE field returns a
+                    // Date object. Send the calendar date exactly as
+                    // displayed (this browser's local Y/M/D), not
+                    // String(value)'s full local timestamp+timezone text -
+                    // re-parsing that server-side re-derives Y/M/D in the
+                    // SERVER's timezone instead, which can land on a
+                    // different calendar day than what was picked.
+                    const year = value.getFullYear();
+                    const month = String(value.getMonth() + 1).padStart(2, '0');
+                    const day = String(value.getDate()).padStart(2, '0');
+                    params.set(fieldId, `${year}-${month}-${day}`);
+                    return;
+                }
+
                 params.set(fieldId, Array.isArray(value) ? value.join(',') : value);
             });
 
@@ -136,6 +166,17 @@ define(['N/search'],
             floorIds: LIB_FX.parseIdListParam(params && params[_FIELDS.FORM.FLOOR]),
             unitIds: LIB_FX.parseIdListParam(params && params[_FIELDS.FORM.UNIT])
         });
+
+        // Returns the labels of any required fields (see _FIELDS.REQUIRED_FIELD_IDS)
+        // left blank on the form. Empty array means all required fields are filled in.
+        LIB_FX.getMissingRequiredFields = (currentRecord) => {
+            return _FIELDS.REQUIRED_FIELD_IDS
+                .filter((fieldId) => {
+                    const value = currentRecord.getValue({fieldId: fieldId});
+                    return value === null || value === '' || (Array.isArray(value) && !value.length);
+                })
+                .map((fieldId) => _FIELDS.FIELD_LABELS[fieldId] || fieldId);
+        }
 
         // Clears a multi-select field's value and options
         LIB_FX.clearFieldOptions = (currentRecord, fieldId) => {

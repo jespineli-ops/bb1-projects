@@ -9,6 +9,7 @@
  *
  * Date        	  Author		        Purpose
  * 08/20/2026     Jared Espineli        Initial version
+ * 08/28/2026     Jared Espineli        Marked As of Date as mandatory
  *
  * Copyright (c) 2022 BlueBridge One Business Solutions, All Rights Reserved [Replace appropriately]
  * support@bluebridgeone.com, +44 (0)1932 300007
@@ -100,11 +101,12 @@ define(['N/ui/serverWidget', './bb1_qpg_tschd_report_lib_helper'],
                 label: 'Unit/s'
             });
 
-            form.addField({
+            const asOfDateField = form.addField({
                 id: _FIELDS.FORM.AS_OF_DATE,
                 type: serverWidget.FieldType.DATE,
                 label: 'As of Date'
             });
+            asOfDateField.isMandatory = true;
 
             return form;
         }
