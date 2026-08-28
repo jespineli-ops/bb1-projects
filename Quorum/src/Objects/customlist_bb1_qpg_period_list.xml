@@ -1,0 +1,56 @@
+<customlist scriptid="customlist_bb1_qpg_period_list">
+  <description></description>
+  <isinactive>F</isinactive>
+  <isordered>T</isordered>
+  <name>Period List</name>
+  <customvalues>
+    <customvalue scriptid="val_77714_11536405_sb1_788">
+      <isinactive>F</isinactive>
+      <value>1</value>
+    </customvalue>
+    <customvalue scriptid="val_77715_11536405_sb1_927">
+      <isinactive>F</isinactive>
+      <value>2</value>
+    </customvalue>
+    <customvalue scriptid="val_77716_11536405_sb1_934">
+      <isinactive>F</isinactive>
+      <value>3</value>
+    </customvalue>
+    <customvalue scriptid="val_77717_11536405_sb1_323">
+      <isinactive>F</isinactive>
+      <value>4</value>
+    </customvalue>
+    <customvalue scriptid="val_77718_11536405_sb1_919">
+      <isinactive>F</isinactive>
+      <value>5</value>
+    </customvalue>
+    <customvalue scriptid="val_77719_11536405_sb1_340">
+      <isinactive>F</isinactive>
+      <value>6</value>
+    </customvalue>
+    <customvalue scriptid="val_77720_11536405_sb1_615">
+      <isinactive>F</isinactive>
+      <value>7</value>
+    </customvalue>
+    <customvalue scriptid="val_77721_11536405_sb1_331">
+      <isinactive>F</isinactive>
+      <value>8</value>
+    </customvalue>
+    <customvalue scriptid="val_77722_11536405_sb1_545">
+      <isinactive>F</isinactive>
+      <value>9</value>
+    </customvalue>
+    <customvalue scriptid="val_77723_11536405_sb1_484">
+      <isinactive>F</isinactive>
+      <value>10</value>
+    </customvalue>
+    <customvalue scriptid="val_77724_11536405_sb1_966">
+      <isinactive>F</isinactive>
+      <value>11</value>
+    </customvalue>
+    <customvalue scriptid="val_77725_11536405_sb1_590">
+      <isinactive>F</isinactive>
+      <value>12</value>
+    </customvalue>
+  </customvalues>
+</customlist>
