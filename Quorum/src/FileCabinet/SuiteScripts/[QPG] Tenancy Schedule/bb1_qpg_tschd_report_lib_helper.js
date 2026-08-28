@@ -9,6 +9,7 @@
  * Date        	  Author		        Purpose
  * 08/20/2026     Jared Espineli        Initial Version
  * 08/24/2026     Jared Espineli        Added Export CSV action
+ * 08/27/2026     Jared Espineli        Added getFiltersFromParams() to turn the Suitelet's request params into the data lib's filter lists
  *
  * Copyright (c) 2022 BlueBridge One Business Solutions, All Rights Reserved [Replace appropriately]
  * support@bluebridgeone.com, +44 (0)1932 300007
@@ -117,6 +118,24 @@ define(['N/search'],
 
             return `${window.location.pathname}?${params.toString()}`;
         }
+
+        // Splits a comma-separated request param (as set by buildReportUrl)
+        // back into an array of id strings. '' /null/undefined -> [].
+        LIB_FX.parseIdListParam = (value) => {
+            if (value === null || value === undefined || value === '') return [];
+            return String(value).split(',').map((id) => id.trim()).filter(Boolean);
+        }
+
+        // Builds the data lib's filters object (see data_lib buildQuery) from
+        // the Suitelet's request.parameters - shared by the PDF/CSV builders.
+        LIB_FX.getFiltersFromParams = (params) => ({
+            portfolioIds: LIB_FX.parseIdListParam(params && params[_FIELDS.FORM.PROPERTY_PORTFOLIO]),
+            buildingIds: LIB_FX.parseIdListParam(params && params[_FIELDS.FORM.BUILDING]),
+            accommTypeIds: LIB_FX.parseIdListParam(params && params[_FIELDS.FORM.ACCOMM_TYPE]),
+            blockIds: LIB_FX.parseIdListParam(params && params[_FIELDS.FORM.BLOCK]),
+            floorIds: LIB_FX.parseIdListParam(params && params[_FIELDS.FORM.FLOOR]),
+            unitIds: LIB_FX.parseIdListParam(params && params[_FIELDS.FORM.UNIT])
+        });
 
         // Clears a multi-select field's value and options
         LIB_FX.clearFieldOptions = (currentRecord, fieldId) => {

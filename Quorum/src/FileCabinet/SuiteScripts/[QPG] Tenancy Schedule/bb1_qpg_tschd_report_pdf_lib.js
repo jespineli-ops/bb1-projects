@@ -13,6 +13,13 @@
  * 08/26/2026     Jared Espineli        Removed grid lines between detail rows/columns to match reference printout
  * 08/26/2026     Jared Espineli        Removed Current Occupied Area note; boxed Property to its own columns only
  * 08/26/2026     Jared Espineli        Property is now its own table above the main table; total row's top border scoped to Tenant-Budget Rate
+ * 08/26/2026     Jared Espineli        Removed total row's top border - reference printout has no line above Accommodation Type totals
+ * 08/26/2026     Jared Espineli        Added grand Property Totals row at the end of the table (Vacancy/Occupancy TBD)
+ * 08/26/2026     Jared Espineli        Added top border above Property Totals; added Total Vacancy/Occupancy and boxed Grand Totals blocks (values still blank)
+ * 08/26/2026     Jared Espineli        Property Totals block no longer bold; boxed blank rows (double border) around the bold Grand Totals block
+ * 08/27/2026     Jared Espineli        Data rows now driven by the Suitelet's Portfolio/Building/Block/Floor/Unit/Accommodation Type filters
+ * 08/27/2026     Jared Espineli        Total Vacancy/Total Occupancy rows now computed (were blank placeholders)
+ * 08/28/2026     Jared Espineli        Totals rows' Units/Parking column now mirrors their Area column, rounded to a whole number
  *
  * Copyright (c) 2022 BlueBridge One Business Solutions, All Rights Reserved [Replace appropriately]
  * support@bluebridgeone.com, +44 (0)1932 300007
@@ -94,6 +101,7 @@ define(['N/render', './bb1_qpg_tschd_report_lib_helper', './bb1_qpg_tschd_report
 
         const PREMISES_COLUMN_INDEX = COLUMNS.indexOf('Premises');
         const AREA_COLUMN_INDEX = COLUMNS.indexOf('Area');
+        const UNITS_PARKING_COLUMN_INDEX = COLUMNS.indexOf('Units / Parking');
         const TENANT_COLUMN_INDEX = COLUMNS.indexOf('Tenant');
         const CURRENT_RENT_COLUMN_INDEX = COLUMNS.indexOf('Current Rent');
         const RENT_RATE_COLUMN_INDEX = COLUMNS.indexOf('Rent Rate');
@@ -108,13 +116,19 @@ define(['N/render', './bb1_qpg_tschd_report_lib_helper', './bb1_qpg_tschd_report
             return isNaN(num) ? String(value) : num.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
         }
 
-        // Renders one row's <td> cells. borderTop/borderBottom box off the
-        // total row; borderTopFromIndex skips the top border on the first
-        // few columns (Premises/Area/Units-Parking).
+        // Total rows' Units/Parking column mirrors their Area column, rounded
+        // to a whole number (Units/Parking column isn't in NUMERIC_COLUMNS,
+        // so this whole-number value prints as-is, with no decimals).
+        const toWholeNumber = (value) => {
+            if (value === null || value === undefined || value === '') return '';
+            const num = Number(value);
+            return isNaN(num) ? '' : Math.round(num);
+        }
+
+        // Renders one row's <td> cells. borderTop/borderBottom box off total/summary rows.
         const buildRowCells = (values, options) => {
             const bold = options && options.bold;
             const borderTop = options && options.borderTop;
-            const borderTopFromIndex = (options && options.borderTopFromIndex) || 0;
             const borderBottom = options && options.borderBottom;
 
             return values.map((value, index) => {
@@ -122,7 +136,7 @@ define(['N/render', './bb1_qpg_tschd_report_lib_helper', './bb1_qpg_tschd_report
 
                 const styleParts = [];
                 if (bold) styleParts.push('font-weight: bold;');
-                if (borderTop && index >= borderTopFromIndex) styleParts.push('border-top: 0.5pt solid #000000;');
+                if (borderTop) styleParts.push('border-top: 0.5pt solid #000000;');
                 if (borderBottom) styleParts.push('border-bottom: 0.5pt solid #000000;');
                 const style = styleParts.length ? ` style="${styleParts.join(' ')}"` : '';
 
@@ -135,6 +149,7 @@ define(['N/render', './bb1_qpg_tschd_report_lib_helper', './bb1_qpg_tschd_report
             const values = COLUMNS.map(() => '');
             values[PREMISES_COLUMN_INDEX] = group.accommodationType;
             values[AREA_COLUMN_INDEX] = group.totals.area;
+            values[UNITS_PARKING_COLUMN_INDEX] = toWholeNumber(group.totals.area);
             values[CURRENT_RENT_COLUMN_INDEX] = group.totals.currentRent;
             values[RENT_RATE_COLUMN_INDEX] = group.totals.rentRate;
             values[AMOUNT_COLUMN_INDEX] = group.totals.amount;
@@ -144,9 +159,54 @@ define(['N/render', './bb1_qpg_tschd_report_lib_helper', './bb1_qpg_tschd_report
             return values;
         }
 
-        // Each Accommodation Type prints its total row first, then its units' charge rows
-        const buildDataRows = () => {
-            const groups = dataLib.LIB_FX.getAccommodationGroups();
+        // Builds a "Property Totals"/"Grand Totals" row's values, in COLUMNS
+        // order. Tenant column defaults to a literal "100%" (not computed).
+        const buildTotalsRowValues = (label, propertyTotals) => {
+            const values = COLUMNS.map(() => '');
+            values[PREMISES_COLUMN_INDEX] = label;
+            values[AREA_COLUMN_INDEX] = propertyTotals.area;
+            values[UNITS_PARKING_COLUMN_INDEX] = toWholeNumber(propertyTotals.area);
+            values[TENANT_COLUMN_INDEX] = '100%';
+            values[CURRENT_RENT_COLUMN_INDEX] = propertyTotals.currentRent;
+            values[RENT_RATE_COLUMN_INDEX] = propertyTotals.rentRate;
+            values[AMOUNT_COLUMN_INDEX] = propertyTotals.amount;
+            values[RATE_COLUMN_INDEX] = propertyTotals.rate;
+            values[GROSS_INCOME_COLUMN_INDEX] = propertyTotals.grossIncome;
+            values[GROSS_RATE_COLUMN_INDEX] = propertyTotals.grossRate;
+            return values;
+        }
+
+        // Builds the "Total Vacancy" row's values - Area column is the count
+        // of units without an active lease contract, Tenant column is that
+        // count as a % of Property Totals' Area (rounded to 2 decimals).
+        const buildVacancyRowValues = (propertyTotals) => {
+            const values = COLUMNS.map(() => '');
+            values[PREMISES_COLUMN_INDEX] = 'Total Vacancy';
+            values[AREA_COLUMN_INDEX] = propertyTotals.vacancyArea;
+            values[UNITS_PARKING_COLUMN_INDEX] = toWholeNumber(propertyTotals.vacancyArea);
+            values[TENANT_COLUMN_INDEX] = propertyTotals.vacancyPercent === null ? '' : `${formatAmount(propertyTotals.vacancyPercent)}%`;
+            return values;
+        }
+
+        // Builds the "Total Occupancy" row's values - Area column is the
+        // count of units with an active lease contract, Tenant column is
+        // Property Totals' Area minus the Total Vacancy count.
+        const buildOccupancyRowValues = (propertyTotals) => {
+            const values = COLUMNS.map(() => '');
+            values[PREMISES_COLUMN_INDEX] = 'Total Occupancy';
+            values[AREA_COLUMN_INDEX] = propertyTotals.occupancyArea;
+            values[UNITS_PARKING_COLUMN_INDEX] = toWholeNumber(propertyTotals.occupancyArea);
+            values[TENANT_COLUMN_INDEX] = propertyTotals.occupancyTenant;
+            return values;
+        }
+
+        // Each Accommodation Type prints its total row first, then its units'
+        // charge rows. After every group: a Property Totals/Total Vacancy/
+        // Total Occupancy block (not bold), a boxed blank row, then a bold
+        // Grand Totals/Total Vacancy/Total Occupancy block, then another
+        // boxed blank row.
+        const buildDataRows = (filters) => {
+            const groups = dataLib.LIB_FX.getAccommodationGroups(filters);
 
             if (!groups.length) {
                 return `
@@ -158,17 +218,38 @@ define(['N/render', './bb1_qpg_tschd_report_lib_helper', './bb1_qpg_tschd_report
                 `;
             }
 
-            return groups.map((group) => {
-                const totalRow = `<tr>${buildRowCells(buildTotalRowValues(group), {bold: true, borderTop: true, borderTopFromIndex: TENANT_COLUMN_INDEX, borderBottom: true})}</tr>`;
+            const groupRows = groups.map((group) => {
+                const totalRow = `<tr>${buildRowCells(buildTotalRowValues(group), {bold: true, borderBottom: true})}</tr>`;
                 const detailRows = group.rows.map((row) => `<tr>${buildRowCells(row)}</tr>`).join('');
                 return totalRow + detailRows;
             }).join('');
+
+            const propertyTotals = dataLib.LIB_FX.getPropertyTotals(groups);
+
+            // Blank row with both borders set - reads as a double line, boxing
+            // off the Grand Totals block from what's above/below it.
+            const boxedBlankRow = `<tr>${buildRowCells(COLUMNS.map(() => ''), {borderTop: true, borderBottom: true})}</tr>`;
+
+            const propertyTotalsRow = `<tr>${buildRowCells(buildTotalsRowValues('Property Totals', propertyTotals), {borderTop: true})}</tr>`;
+            const totalVacancyRow = `<tr>${buildRowCells(buildVacancyRowValues(propertyTotals))}</tr>`;
+            const totalOccupancyRow = `<tr>${buildRowCells(buildOccupancyRowValues(propertyTotals))}</tr>`;
+
+            const grandTotalsRow = `<tr>${buildRowCells(buildTotalsRowValues('Grand Totals', propertyTotals), {bold: true})}</tr>`;
+            const grandTotalVacancyRow = `<tr>${buildRowCells(buildVacancyRowValues(propertyTotals), {bold: true})}</tr>`;
+            const grandTotalOccupancyRow = `<tr>${buildRowCells(buildOccupancyRowValues(propertyTotals), {bold: true})}</tr>`;
+
+            return groupRows
+                + propertyTotalsRow + totalVacancyRow + totalOccupancyRow
+                + boxedBlankRow
+                + grandTotalsRow + grandTotalVacancyRow + grandTotalOccupancyRow
+                + boxedBlankRow;
         }
 
         LIB_FX.buildPdf = (params) => {
             const asOfDateParam = params && params[_FIELDS.FORM.AS_OF_DATE];
             const parsedAsOfDate = asOfDateParam ? new Date(asOfDateParam) : null;
             const asOfDate = (parsedAsOfDate && !isNaN(parsedAsOfDate.getTime())) ? parsedAsOfDate : new Date();
+            const filters = helperLib.LIB_FX.getFiltersFromParams(params);
 
             const xml = `
                 <?xml version="1.0"?>
@@ -216,7 +297,7 @@ define(['N/render', './bb1_qpg_tschd_report_lib_helper', './bb1_qpg_tschd_report
                         ${buildPropertyTable()}
                         <table class="tschd-table">
                             <tr>${buildColumnHeaderRow()}</tr>
-                            ${buildDataRows()}
+                            ${buildDataRows(filters)}
                         </table>
                     </body>
                 </pdf>
