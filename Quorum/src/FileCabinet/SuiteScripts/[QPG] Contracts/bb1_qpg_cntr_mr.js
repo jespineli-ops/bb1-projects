@@ -52,12 +52,17 @@ define(['N/record', 'N/runtime', 'N/search', './bb1_qpg_cntr_helper_lib'],
             try{
                 let idFxChargeSea = THIS_SCRIPT.getParameter(helperLib._CONFIG.SCRIPTS.PARAMETERS.FIXED_CHARGES_SEARCH);
                 let idUtChargeSea = THIS_SCRIPT.getParameter(helperLib._CONFIG.SCRIPTS.PARAMETERS.UTIL_CHARGES_SEARCH);
+                let idEscSea = THIS_SCRIPT.getParameter(helperLib._CONFIG.SCRIPTS.PARAMETERS.ESC_SEARCH);
                 let isManualRun = THIS_SCRIPT.getParameter(helperLib._CONFIG.SCRIPTS.PARAMETERS.IS_MANUAL);
 
                 //manual runs bill for the configured period; scheduled runs always bill the current date
                 let periodDate = isManualRun
                     ? THIS_SCRIPT.getParameter(helperLib._CONFIG.SCRIPTS.PARAMETERS.UTIL_PERIOD)
                     : new Date();
+
+                //number of consecutive months (starting at periodDate's month) to add utilised charges for -
+                //e.g. coverage = 3 with periodDate = August 2026 adds charges for Aug, Sep and Oct 2026
+                let periodCoverage = parseInt(THIS_SCRIPT.getParameter(helperLib._CONFIG.SCRIPTS.PARAMETERS.PERIOD_COVERAGE), 10) || 1;
 
                 //loop through all active contracts and retrieve all linked utilized charges
                 reduceContext.values.forEach((strValue) => {
@@ -67,12 +72,16 @@ define(['N/record', 'N/runtime', 'N/search', './bb1_qpg_cntr_helper_lib'],
 
                     log.debug('reduce values', value);
 
-                    //call search function to get all fixed charges for the current month
-                    let fixedCharges = helperLib.LIB_FX.searchData(idFxChargeSea, 'fixedChrg', periodDate, idBuilding);
-                    log.debug('fixedCharges', fixedCharges);
+                    //add utilised charges for each covered period, walking forward month by month from periodDate
+                    for(let i = 0; i < periodCoverage; i++){
+                        let coveredPeriodDate = helperLib.LIB_FX.addMonths(periodDate, i);
 
+                        //call search function to get all fixed charges for this covered period
+                        let fixedCharges = helperLib.LIB_FX.searchData(idFxChargeSea, 'fixedChrg', coveredPeriodDate, idBuilding);
+                        log.debug('fixedCharges', fixedCharges);
 
-                    helperLib.LIB_FX.addChargeLines(idContract, fixedCharges, value.values, isManualRun, periodDate, idUtChargeSea);
+                        helperLib.LIB_FX.addChargeLines(idContract, fixedCharges, value.values, isManualRun, coveredPeriodDate, idUtChargeSea, idEscSea);
+                    }
                 })
             }catch(e){
                 log.error('_reduce error', e.message);

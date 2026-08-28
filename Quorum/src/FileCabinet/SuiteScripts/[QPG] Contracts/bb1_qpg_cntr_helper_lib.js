@@ -20,8 +20,10 @@ define(['N/record', 'N/runtime', 'N/search', 'N/format'],
                     CONTRACT_SEARCH: 'custscript_bb1_qpg_actv_cntr_util',
                     FIXED_CHARGES_SEARCH: 'custscript_bb1_qpg_fx_chrg_util',
                     UTIL_CHARGES_SEARCH: 'custscript_bb1_qpg_util_chrg_util',
+                    ESC_SEARCH : 'custscript_bb1_qpg_esc_val_util',
                     IS_MANUAL: 'custscript_bb1_qpg_man_chck_util',
                     UTIL_PERIOD: 'custscript_bb1_qpg_period_util',
+                    PERIOD_COVERAGE: 'custscript_bb1_qpg_prd_cvr_util',
                     UPDATE_CONTRACT: 'custscript_bb1_qpg_cntr_ids',
                     INV_PERIOD: 'custscript_bb1_qpg_cntr_period_inv'
                 }
@@ -71,6 +73,12 @@ define(['N/record', 'N/runtime', 'N/search', 'N/format'],
                         UTIL_CHRG_REC: 'custcol_bb1_qpg_cntr_inv_chrg_rec'
                     }
                 }
+            },
+            ESCALATION: {
+                LEASE_CONTRACT: 'custrecord_bb1_escalations_lease_contrac',
+                START_DATE: 'custrecord_bb1_escalations_start_date',
+                END_DATE: 'custrecord_bb1_escalations_end_date',
+                RENT: 'custrecord_bb1_escalations_rent'
             }
         }
 
@@ -102,30 +110,15 @@ define(['N/record', 'N/runtime', 'N/search', 'N/format'],
             //shallow copy so pushes below don't mutate the cached base filters shared by other calls
             let filterExpr = searchDef.filterExpression.slice();
 
-            //fixedChrg: start date is within this month, or started earlier but still open/ongoing
-            const buildFixedChrgFilter = (date, strDate, strMonthStart, strEndDate) => [
+            //fixedChrg: charge's [start, end] date range overlaps this period's calendar month - a charge with
+            //no end date set is treated as open-ended and always overlaps once it has started
+            const buildFixedChrgFilter = (strMonthStart, strMonthEnd) => [
+                ['custrecord_bb1_fixed_start_dated', 'onorbefore', strMonthEnd],
+                'and',
                 [
-                    ['custrecord_bb1_fixed_start_dated', 'onorafter', strMonthStart],
-                    'and',
-                    ['custrecord_bb1_fixed_start_dated', 'onorbefore', strEndDate],
-                    'and',
-                    [
-                        ['custrecord_bb1_fixed_end_date', 'isempty', ''],
-                        'or',
-                        ['custrecord_bb1_fixed_end_date', 'onorafter', strEndDate]
-                    ]
-                ],
-                'or',
-                [
-                    ['custrecord_bb1_fixed_start_dated', 'before', strMonthStart],
-                    'and',
-                    ['custrecord_bb1_fixed_end_date', 'after', strEndDate]
-                ],
-                'or',
-                [
-                    ['custrecord_bb1_fixed_start_dated', 'onorbefore', strDate],
-                    'and',
-                    ['custrecord_bb1_fixed_end_date', 'isempty', '']
+                    ['custrecord_bb1_fixed_end_date', 'isempty', ''],
+                    'or',
+                    ['custrecord_bb1_fixed_end_date', 'onorafter', strMonthStart]
                 ]
             ];
 
@@ -139,24 +132,34 @@ define(['N/record', 'N/runtime', 'N/search', 'N/format'],
             ];
 
             const buildEndDateFilter = (date) => {
-                let strDate = format.format({value: date, type: format.Type.DATE});
                 let monthStart = new Date(date.getFullYear(), date.getMonth(), 1);
                 let monthEnd = new Date(date.getFullYear(), date.getMonth() + 1, 0);
+                let strMonthStart = format.format({value: monthStart, type: format.Type.DATE});
+
+                //fixedChrg is always evaluated against the target period's own calendar month - never
+                //against today's real date, so a forward-covered period (period coverage > 1) is judged on
+                //its own merits rather than whatever day the script happens to run on
+                if(searchType === 'fixedChrg'){
+                    let strMonthEnd = format.format({value: monthEnd, type: format.Type.DATE});
+                    return buildFixedChrgFilter(strMonthStart, strMonthEnd);
+                }
+
                 let today = new Date();
 
                 //date structuring for different utitily charge searches
                 let targetsOtherMonth = searchType === 'utilChrgInv' && (date.getFullYear() !== today.getFullYear() || date.getMonth() !== today.getMonth());
                 let endDate = (searchType === 'utilChrgPeriod' || targetsOtherMonth) ? monthEnd : today;
-                let strMonthStart = format.format({value: monthStart, type: format.Type.DATE});
                 let strEndDate = format.format({value: endDate, type: format.Type.DATE});
 
-                return (searchType === 'utilChrg' || searchType === 'utilChrgUE' || searchType === 'utilChrgInv' || searchType === 'utilChrgPeriod')
-                    ? buildUtilChrgFilter(strMonthStart, strEndDate)
-                    : buildFixedChrgFilter(date, strDate, strMonthStart, strEndDate);
+                return buildUtilChrgFilter(strMonthStart, strEndDate);
             }
 
             if(searchType === 'fixedChrg' && periodDate){ //for fixed charges search
                 filterExpr.push('and', buildEndDateFilter(periodDate));
+
+                if(idBuilding){ //scopes the search to one building - used by the scheduled MR run
+                    filterExpr.push('and', ['custrecord_bb1_fixed_building', 'anyof', idBuilding]);
+                }
             }
 
             if((searchType === 'utilChrg' || searchType === 'utilChrgUE' || searchType === 'utilChrgInv' || searchType === 'utilChrgPeriod') && periodDate){ //for utilisation charges search
@@ -174,12 +177,15 @@ define(['N/record', 'N/runtime', 'N/search', 'N/format'],
                 filterExpr.push('and', ['custrecord_bb1_utilised_lease', 'anyof', idContract]);
             }
 
-            //additional criteria for fixed charges search
-            if(idBuilding){ //used for scheduled run
+            //escalation: this contract's escalation record whose date range contains the period date
+            if(searchType === 'escalation' && idContract && periodDate){
+                let strDate = format.format({value: periodDate, type: format.Type.DATE});
                 filterExpr.push('and', [
-                    ['custrecord_bb1_fixed_building', 'anyof', idBuilding],
+                    [_FIELDS.ESCALATION.LEASE_CONTRACT, 'anyof', idContract],
                     'and',
-                    buildEndDateFilter(new Date())
+                    [_FIELDS.ESCALATION.START_DATE, 'onorbefore', strDate],
+                    'and',
+                    [_FIELDS.ESCALATION.END_DATE, 'onorafter', strDate]
                 ]);
             }
 
@@ -212,6 +218,16 @@ define(['N/record', 'N/runtime', 'N/search', 'N/format'],
 
         //extracts the display text from a list/record search result field, e.g. [{value, text}]
         LIB_FX.getListText = (fieldValue) => (fieldValue && fieldValue.length > 0) ? fieldValue[0].text : '';
+
+        //returns a new date advanced by the given number of calendar months, keeping the same day-of-month -
+        //used to walk forward through the periods covered by custscript_bb1_qpg_prd_cvr_util
+        LIB_FX.addMonths = (date, months) => new Date(date.getFullYear(), date.getMonth() + months, date.getDate());
+
+        //lease type (custrecord_bb1_lease_type) id for Parking - every other lease type is treated as Rent
+        const LEASE_TYPE_PARKING = '2';
+
+        //lease item (custrecord_bb1_lease_item) id identifying a Commercial Rent contract
+        const LEASE_ITEM_COMMERCIAL_RENT = '14';
 
         //rent/parking type ids - skipFixedCharges = true excludes fixed charges for that lease type (parking)
         const STATIC_CHARGE_CONFIG = {
@@ -247,10 +263,38 @@ define(['N/record', 'N/runtime', 'N/search', 'N/format'],
             };
         }
 
+        //true if this contract is Commercial Rent (lease item 14) on a Rent Type lease (i.e. not Parking) -
+        //the only contracts date-based escalation records apply to
+        LIB_FX.isCommercialRentContract = (rentItem, idLeaseType) =>
+            String(rentItem) === LEASE_ITEM_COMMERCIAL_RENT && String(idLeaseType) !== LEASE_TYPE_PARKING;
+
+        /**
+         * commercial rent contracts only - looks up the escalation record whose date range (start/end date)
+         * contains periodDate and returns its rent amount, or null if no escalation applies for this period
+         */
+        LIB_FX.getEscalationRentAmount = (idContract, periodDate, idEscSea) => {
+            if(!idEscSea){
+                return null;
+            }
+
+            let escalationResults = LIB_FX.searchData(idEscSea, 'escalation', periodDate, '', idContract);
+
+            if(!escalationResults.length){
+                return null;
+            }
+
+            if(escalationResults.length > 1){
+                log.error('getEscalationRentAmount', 'contract ' + idContract + ' has ' + escalationResults.length + ' escalation records active for the same period - using the first one (id ' + escalationResults[0].id + ')');
+            }
+
+            let escalationRent = parseFloat(escalationResults[0].getValue({name: _FIELDS.ESCALATION.RENT}));
+            return isNaN(escalationRent) ? null : escalationRent;
+        }
+
         /**
          * adds charge lines (fixed + static rent/parking) to the contract record for the given period
          */
-        LIB_FX.addChargeLines = (idContract, fixedCharges, contractValues, isManualRun, periodDate, idUtChargeSea) => {
+        LIB_FX.addChargeLines = (idContract, fixedCharges, contractValues, isManualRun, periodDate, idUtChargeSea, idEscSea) => {
             //values sourced from the contract's search row (moved here from the mr script's reduce stage)
             let idLeaseType = LIB_FX.getListValue(contractValues.custrecord_bb1_lease_type);
             let rentAmount = parseFloat(contractValues.custrecord_bb1_lease_rent) || 0;
@@ -288,11 +332,13 @@ define(['N/record', 'N/runtime', 'N/search', 'N/format'],
                 periodCharges.map((entry) => entry.getValue({name: chargeFields.ITEM})).filter(Boolean).map(String)
             );
 
-            //use the period date in the manual deployment for the utilisation date - periodDate comes from a
-            let utilDate = isManualRun ? format.parse({value: periodDate, type: format.Type.DATE}) : new Date();
+            //utilisation date always tracks the period being processed - covers both the manual run's
+            //configured period and each of the forward months walked by the period coverage loop in the MR
+            //script's reduce stage; manual runs re-parse to normalise away any time-of-day component
+            let utilDate = isManualRun ? format.parse({value: periodDate, type: format.Type.DATE}) : periodDate;
 
 
-            let staticConfig = String(idLeaseType) === '2' ? STATIC_CHARGE_CONFIG.PARKING : STATIC_CHARGE_CONFIG.RENT;
+            let staticConfig = String(idLeaseType) === LEASE_TYPE_PARKING ? STATIC_CHARGE_CONFIG.PARKING : STATIC_CHARGE_CONFIG.RENT;
             let staticCharge = rentItem ? {
                 desc: rentItemText,
                 item: rentItem,
@@ -334,6 +380,15 @@ define(['N/record', 'N/runtime', 'N/search', 'N/format'],
 
             //month-to-month leases add the escalation percentage on top of the base rent; fixed-term leases don't
             let escalatedRentAmount = isMonthtoMonth ? rentAmount + (rentAmount * escalationRate) : rentAmount;
+
+            //commercial rent contracts (rent type, not parking) can instead have a date-based escalation
+            //record for the current period - when one applies, its rent amount overrides the above
+            if(LIB_FX.isCommercialRentContract(rentItem, idLeaseType)){
+                let escalationRentAmount = LIB_FX.getEscalationRentAmount(idContract, periodDate, idEscSea);
+                if(escalationRentAmount !== null){
+                    escalatedRentAmount = escalationRentAmount;
+                }
+            }
 
             if(staticCharge && !staticChargeExists){
                 let rentTaxSchedule = LIB_FX.getListText(contractValues[LEASE_ITEM_TAX_SCHEDULE_KEY]);
