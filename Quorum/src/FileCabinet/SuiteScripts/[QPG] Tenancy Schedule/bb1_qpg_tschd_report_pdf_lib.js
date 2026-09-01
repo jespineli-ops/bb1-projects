@@ -29,6 +29,10 @@
  * 08/31/2026     Jared Espineli        Fixed wrapped column header labels rendering with stretched letter spacing (BFO
  *                                      justifies wrapped <th> text by default; header labels now wrap in a left-aligned
  *                                      <p>); shrank header logo so it no longer overlaps the table header
+ * 09/01/2026     Jared Espineli        No code change here, but the Gross Income/Gross Rate figures this file prints are
+ *                                      now computed per Utilised Date sub-group within a unit, not once for the whole
+ *                                      unit - see dataLib's getAccommodationGroups. A unit with charges on 2+ dates now
+ *                                      prints 2+ Gross Income/Gross Rate lines (one per date) instead of just one
  *
  * Copyright (c) 2022 BlueBridge One Business Solutions, All Rights Reserved [Replace appropriately]
  * support@bluebridgeone.com, +44 (0)1932 300007

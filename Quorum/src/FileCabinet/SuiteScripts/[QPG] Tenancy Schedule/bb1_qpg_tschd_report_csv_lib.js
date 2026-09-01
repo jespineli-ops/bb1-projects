@@ -19,6 +19,10 @@
  * 08/28/2026     Jared Espineli        Added 3 new columns from the updated workbook - Future Lease, Tenant ID, Group Tenant
  * 08/28/2026     Jared Espineli        Merged the title row and printed-timestamp row into a single title row (was two
  *                                      separate rows, read as two titles)
+ * 09/01/2026     Jared Espineli        Rows now group/sum by Utilised Date (custrecord_bb1_utilised_date) instead of by
+ *                                      Unit alone - a unit with charges on 2+ dates now exports one summed row per date.
+ *                                      Added Charge Date/Other Chargings/Description columns (data lib's getCsvRows now
+ *                                      exposes them per date group) so it's clear what each summed row covers
  *
  * Copyright (c) 2022 BlueBridge One Business Solutions, All Rights Reserved [Replace appropriately]
  * support@bluebridgeone.com, +44 (0)1932 300007
@@ -46,6 +50,7 @@ define(['N/file', './bb1_qpg_tschd_report_lib_helper', './bb1_qpg_tschd_report_d
             'Tenant Zip', 'Tenant City', 'Tenant State', 'Tenant Country',
             'Starts', 'Expires', 'Review', 'Months Option', 'Rent Esc%',
             'Current Rent', 'Rent Rate', 'Rate Area Excl VAT', 'Amount', 'Rate', 'Amount Incl VAT',
+            'Charge Date', 'Other Chargings', 'Description',
             'Gross Income', 'Gross Rate', 'Budget Rate'
         ];
 
@@ -93,7 +98,8 @@ define(['N/file', './bb1_qpg_tschd_report_lib_helper', './bb1_qpg_tschd_report_d
 
             // Single title row (as of date + printed timestamp), then a
             // blank row, column headers, then the raw data rows - one row
-            // per Unit, no Property row, no Accommodation Type subtotal rows.
+            // per Unit per Utilised Date, no Property row, no Accommodation
+            // Type subtotal rows.
             const rows = [
                 titleRow,
                 [],

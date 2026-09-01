@@ -32,6 +32,13 @@
  * 08/28/2026     Jared Espineli        buildCsvQuery updated for 3 new workbook columns - custrecord_bb1_lease_future,
  *                                      the tenant's entityid and custentity_bb1_group_tenant - CSV export only, per updated
  *                                      workbook query
+ * 09/01/2026     Jared Espineli        Charge lines now group/sum by Utilised Charge Date (custrecord_bb1_utilised_date),
+ *                                      not just by Unit - a unit with charges recorded on 2+ dates now produces one summed
+ *                                      line per date instead of one line for the whole unit. Added the new date column
+ *                                      (plus Type/Description, now meaningful per date group) to buildQuery/buildCsvQuery;
+ *                                      getCsvRows groups by Unit+Date; getAccommodationGroups computes Gross Income/Gross
+ *                                      Rate per Unit+Date sub-group instead of once per Unit. PDF query now also orders by
+ *                                      the charge date so a unit's same-date rows print contiguously
  *
  * Copyright (c) 2022 BlueBridge One Business Solutions, All Rights Reserved [Replace appropriately]
  * support@bluebridgeone.com, +44 (0)1932 300007
@@ -94,10 +101,13 @@ define(['N/query'],
             !['name', 'custrecord_bb1_unit_counter', 'name_1', 'custrecord_bb1_unit_budget_rate'].includes(column));
 
         // CSV export columns, in the order they're printed - one query field
-        // per CSV column, per the updated workbook (see buildCsvQuery). Type/
-        // Description are deliberately excluded: they're per-charge-line text
-        // (e.g. "Fixed"/"Fixed Effluent") that can't collapse into a single
-        // value once a unit's charge lines are merged into one CSV row.
+        // per CSV column, per the updated workbook (see buildCsvQuery). A
+        // unit's charge lines are now grouped/summed by Utilised Date (see
+        // getCsvRows), not merged across the whole unit, so Type/Description
+        // are included again - each date group's Type/Description is read
+        // off its first charge line (they only fully identify the group when
+        // that date has a single charge; a date with multiple differently-
+        // typed charges still shows just the first one's Type/Description).
         const CSV_ROW_COLUMNS = [
             'name', 'addr1', 'addr2', 'zip', 'city', 'dropdownstate', 'country',
             'custrecord_bb1_unit_counter', 'custrecord_bb1_unit_area', 'custrecord_bb1_unit_status',
@@ -109,16 +119,18 @@ define(['N/query'],
             'custrecord_bb1_lease_start_date', 'custrecord_bb1_lease_end_date', 'custrecord_bb1_lease_review_date',
             'custrecord_bb1_lease_opt_months', 'custrecord_bb1_lease_rent_escalation',
             'formula_1', 'formula_2', 'custrecord_bb1_utilised_rateareaexcl_vat', 'custrecord_bb1_utilised_rate_ex_vat',
-            'formula_5', 'custrecord_bb1_utilised_amt_inclusiv_vat', 'formula_3', 'formula_4',
+            'formula_5', 'custrecord_bb1_utilised_amt_inclusiv_vat',
+            'custrecord_bb1_utilised_date', 'custrecord_bb1_utilised_type', 'custrecord_bb1_utilised_description',
+            'formula_3', 'formula_4',
             'custrecord_bb1_unit_budget_rate'
         ];
 
         // These CSV columns are per-charge-line amounts (sourced from the
-        // Utilised Charges join) - when a unit has multiple charge lines,
-        // they're summed into that unit's single CSV row. Every other
-        // CSV_ROW_COLUMNS entry is a Unit/Lease/Tenant-level field that's
-        // identical across all of a unit's charge lines, so it's just read
-        // off the first row.
+        // Utilised Charges join) - when a unit has multiple charge lines on
+        // the same Utilised Date, they're summed into that date's single CSV
+        // row. Every other CSV_ROW_COLUMNS entry (including the Utilised
+        // Date/Type/Description columns themselves) is read off the first
+        // charge line in the date group instead.
         const CSV_SUM_COLUMNS = new Set([
             'formula_1', 'formula_2', 'custrecord_bb1_utilised_rateareaexcl_vat',
             'custrecord_bb1_utilised_rate_ex_vat', 'formula_5', 'custrecord_bb1_utilised_amt_inclusiv_vat',
@@ -212,6 +224,7 @@ define(['N/query'],
                   CASE WHEN BUILTIN.DF(CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_type) <> 'Rent' THEN CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_rate_ex_vat END AS custrecord_bb1_utilised_rate_ex_vat,
                   CASE WHEN BUILTIN.DF(CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_type) <> 'Rent' THEN CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_rate_ex_vat / CUSTOMRECORD_CSEG_BB1_UNIT.custrecord_bb1_unit_counter END AS formula_5,
                   CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_amt_inclusiv_vat AS custrecord_bb1_utilised_amt_inclusiv_vat,
+                  CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_date AS custrecord_bb1_utilised_date,
                   CASE WHEN BUILTIN.DF(CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_type) <> 'Rent' THEN BUILTIN.DF(CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_type) END AS custrecord_bb1_utilised_type,
                   CASE WHEN BUILTIN.DF(CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_type) <> 'Rent' THEN CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_description END AS custrecord_bb1_utilised_description,
                   CUSTOMRECORD_CSEG_BB1_UNIT.custrecord_bb1_unit_budget_rate AS custrecord_bb1_unit_budget_rate,
@@ -232,6 +245,7 @@ define(['N/query'],
                     CUSTOMRECORD_BB1_UTILISED_CHARGES.custrecord_bb1_utilised_rate_ex_vat AS custrecord_bb1_utilised_rate_ex_vat,
                     CUSTOMRECORD_BB1_UTILISED_CHARGES.custrecord_bb1_utilised_rateareaexcl_vat AS custrecord_bb1_utilised_rateareaexcl_vat,
                     CUSTOMRECORD_BB1_UTILISED_CHARGES.custrecord_bb1_utilised_amt_inclusiv_vat AS custrecord_bb1_utilised_amt_inclusiv_vat,
+                    CUSTOMRECORD_BB1_UTILISED_CHARGES.custrecord_bb1_utilised_date AS custrecord_bb1_utilised_date,
                     CUSTOMRECORD_BB1_UTILISED_CHARGES.custrecord_bb1_utilised_description AS custrecord_bb1_utilised_description
                   FROM
                     CUSTOMRECORD_BB1_LEASE_CONTRACT,
@@ -295,6 +309,7 @@ define(['N/query'],
                 ORDER BY
                   accommodation_type_name,
                   name_1,
+                  CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_date,
                   CASE WHEN BUILTIN.DF(CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_type) = 'Rent' THEN 0 ELSE 1 END,
                   CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_description
             `;
@@ -372,6 +387,9 @@ define(['N/query'],
                   CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_rate_ex_vat AS custrecord_bb1_utilised_rate_ex_vat,
                   CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_rate_ex_vat / CUSTOMRECORD_CSEG_BB1_UNIT.custrecord_bb1_unit_counter AS formula_5,
                   CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_amt_inclusiv_vat AS custrecord_bb1_utilised_amt_inclusiv_vat,
+                  CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_date AS custrecord_bb1_utilised_date,
+                  CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_type AS custrecord_bb1_utilised_type,
+                  CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_description AS custrecord_bb1_utilised_description,
                   TO_NUMBER(CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_rate_ex_vat) + CASE WHEN BUILTIN.DF(CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_type) = 'Rent' THEN TO_NUMBER(CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_rate_ex_vat) END AS formula_3,
                   (TO_NUMBER(CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_rate_ex_vat) + CASE WHEN BUILTIN.DF(CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_type) = 'Rent' THEN TO_NUMBER(CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_rate_ex_vat) END) / CUSTOMRECORD_CSEG_BB1_UNIT.custrecord_bb1_unit_counter AS formula_4,
                   CUSTOMRECORD_CSEG_BB1_UNIT.custrecord_bb1_unit_budget_rate AS custrecord_bb1_unit_budget_rate
@@ -404,7 +422,9 @@ define(['N/query'],
                     CUSTOMRECORD_BB1_UTILISED_CHARGES.custrecord_bb1_utilised_type AS custrecord_bb1_utilised_type,
                     CUSTOMRECORD_BB1_UTILISED_CHARGES.custrecord_bb1_utilised_rate_ex_vat AS custrecord_bb1_utilised_rate_ex_vat,
                     CUSTOMRECORD_BB1_UTILISED_CHARGES.custrecord_bb1_utilised_rateareaexcl_vat AS custrecord_bb1_utilised_rateareaexcl_vat,
-                    CUSTOMRECORD_BB1_UTILISED_CHARGES.custrecord_bb1_utilised_amt_inclusiv_vat AS custrecord_bb1_utilised_amt_inclusiv_vat
+                    CUSTOMRECORD_BB1_UTILISED_CHARGES.custrecord_bb1_utilised_amt_inclusiv_vat AS custrecord_bb1_utilised_amt_inclusiv_vat,
+                    CUSTOMRECORD_BB1_UTILISED_CHARGES.custrecord_bb1_utilised_date AS custrecord_bb1_utilised_date,
+                    CUSTOMRECORD_BB1_UTILISED_CHARGES.custrecord_bb1_utilised_description AS custrecord_bb1_utilised_description
                   FROM
                     CUSTOMRECORD_BB1_LEASE_CONTRACT,
                     (SELECT
@@ -673,12 +693,18 @@ define(['N/query'],
 
         /**
          * CSV export rows, from the updated workbook query (buildCsvQuery) -
-         * raw data, one row per Unit (not per charge line). A unit with
-         * multiple charge lines (Rent + Fixed Effluent + Fixed Refuse, etc.)
-         * has its CSV_SUM_COLUMNS amounts summed across those lines into a
-         * single row; every other CSV_ROW_COLUMNS field is read off the
-         * first charge line, since it's identical across all of a unit's
-         * charge lines (Unit/Lease/Tenant-level data, not charge-level).
+         * raw data, one row per Unit per distinct Utilised Date (not one row
+         * per Unit, and not per raw charge line). A unit with multiple
+         * charge lines recorded on the SAME Utilised Date (Rent + Fixed
+         * Effluent + Fixed Refuse, etc.) has its CSV_SUM_COLUMNS amounts
+         * summed across just those same-date lines into one row; a unit
+         * whose charges span 2+ different dates gets one summed row per
+         * date instead of a single unit-wide row. Every other
+         * CSV_ROW_COLUMNS field is read off the first charge line in that
+         * date group, since it's identical across all of a unit's charge
+         * lines (Unit/Lease/Tenant-level data, not charge-level) - except
+         * Type/Description, which are only as accurate as that first line
+         * when a date group mixes charge types (see CSV_ROW_COLUMNS comment).
          *
          * As of Date drives the same active-lease check as the PDF (see
          * getAccommodationGroups): when a unit's lease isn't active as of
@@ -696,54 +722,76 @@ define(['N/query'],
             const rows = query.runSuiteQL({query: sql, params: params}).asMappedResults();
             const referenceDate = toDateOnly(asOfDate) || toDateOnly(new Date());
 
+            // Group by Unit, then by that unit's Utilised Date, preserving
+            // the order each unit/date pair first appears in.
             const unitOrder = [];
             const unitsById = new Map();
 
             rows.forEach((row) => {
                 const unitId = row.unit_id;
                 if (!unitsById.has(unitId)) {
-                    unitsById.set(unitId, []);
+                    unitsById.set(unitId, {dateOrder: [], rowsByDate: new Map()});
                     unitOrder.push(unitId);
                 }
-                unitsById.get(unitId).push(row);
+
+                const unit = unitsById.get(unitId);
+                const dateKey = row.custrecord_bb1_utilised_date || '';
+                if (!unit.rowsByDate.has(dateKey)) {
+                    unit.rowsByDate.set(dateKey, []);
+                    unit.dateOrder.push(dateKey);
+                }
+                unit.rowsByDate.get(dateKey).push(row);
             });
 
-            return unitOrder.map((unitId) => {
-                const unitRows = unitsById.get(unitId);
-                const firstRow = unitRows[0];
-                const hasActiveLease = isLeaseActive(
-                    firstRow.custrecord_bb1_lease_start_date, firstRow.custrecord_bb1_lease_end_date, referenceDate);
+            const csvRows = [];
 
-                return CSV_ROW_COLUMNS.map((column) => {
-                    if (!hasActiveLease) {
-                        if (column === 'formula_6') return 'Vacant';
-                        if (CSV_LEASE_DERIVED_COLUMNS.includes(column)) return '';
-                    }
+            unitOrder.forEach((unitId) => {
+                const unit = unitsById.get(unitId);
 
-                    if (!CSV_SUM_COLUMNS.has(column)) {
-                        const value = firstRow[column];
-                        return value === null || value === undefined ? '' : value;
-                    }
+                unit.dateOrder.forEach((dateKey) => {
+                    const dateRows = unit.rowsByDate.get(dateKey);
+                    const firstRow = dateRows[0];
+                    const hasActiveLease = isLeaseActive(
+                        firstRow.custrecord_bb1_lease_start_date, firstRow.custrecord_bb1_lease_end_date, referenceDate);
 
-                    let sum = 0;
-                    let hasValue = false;
-                    unitRows.forEach((row) => {
-                        const num = toNumberOrNull(row[column]);
-                        if (num !== null) {
-                            sum += num;
-                            hasValue = true;
+                    csvRows.push(CSV_ROW_COLUMNS.map((column) => {
+                        if (!hasActiveLease) {
+                            if (column === 'formula_6') return 'Vacant';
+                            if (CSV_LEASE_DERIVED_COLUMNS.includes(column)) return '';
                         }
-                    });
 
-                    return hasValue ? sum : '';
+                        if (!CSV_SUM_COLUMNS.has(column)) {
+                            const value = firstRow[column];
+                            return value === null || value === undefined ? '' : value;
+                        }
+
+                        let sum = 0;
+                        let hasValue = false;
+                        dateRows.forEach((row) => {
+                            const num = toNumberOrNull(row[column]);
+                            if (num !== null) {
+                                sum += num;
+                                hasValue = true;
+                            }
+                        });
+
+                        return hasValue ? sum : '';
+                    }));
                 });
             });
+
+            return csvRows;
         }
 
         /**
          * PDF export rows: groups by Unit first (to compute each unit's
-         * Gross Income/Gross Rate, shown on its last charge row only), then
-         * by Accommodation Type (to compute that type's subtotal row).
+         * Gross Income/Gross Rate), then by Accommodation Type (to compute
+         * that type's subtotal row). Within a unit, charge rows are further
+         * sub-grouped by Utilised Date (custrecord_bb1_utilised_date) - the
+         * Gross Income/Gross Rate figures are computed per date sub-group
+         * (not once for the whole unit) and shown on that sub-group's last
+         * charge row, so a unit whose charges span 2+ dates prints 2+
+         * summed Gross Income/Gross Rate lines instead of just one.
          * A unit is "occupied" if it has a Current Rent value - only
          * occupied units' area counts as "Occupied Area", which Rent
          * Rate/Rate/Gross Rate divide by instead of the type's full area.
@@ -787,7 +835,9 @@ define(['N/query'],
             });
 
             // compute each unit's Current Rent, occupancy and Gross Income/
-            // Gross Rate, then attach the gross figures to its last row only
+            // Gross Rate (the latter two per Utilised Date sub-group - see
+            // below), then attach the gross figures to each sub-group's
+            // last row
             unitOrder.forEach((unitId) => {
                 const unit = unitsById.get(unitId);
                 let currentRent = null;
@@ -795,6 +845,12 @@ define(['N/query'],
                 let hasCharge = false;
                 let leaseStartDate = null;
                 let leaseEndDate = null;
+
+                // sub-group this unit's rows by Utilised Date, preserving
+                // the order they came back in (buildQuery orders by date
+                // within a unit, so same-date rows are already contiguous)
+                const dateOrder = [];
+                const rowsByDate = new Map();
 
                 unit.rows.forEach((row, index) => {
                     if (index === 0) {
@@ -816,6 +872,13 @@ define(['N/query'],
                             row[column] = null;
                         });
                     }
+
+                    const dateKey = row.custrecord_bb1_utilised_date || '';
+                    if (!rowsByDate.has(dateKey)) {
+                        rowsByDate.set(dateKey, []);
+                        dateOrder.push(dateKey);
+                    }
+                    rowsByDate.get(dateKey).push(row);
                 });
 
                 unit.hasActiveLease = isLeaseActive(leaseStartDate, leaseEndDate, referenceDate);
@@ -832,19 +895,52 @@ define(['N/query'],
                     currentRent = null;
                     amountSum = 0;
                     hasCharge = false;
+                } else {
+                    // Active lease: compute Gross Income/Gross Rate per
+                    // Utilised Date sub-group and attach each figure to
+                    // that sub-group's own last row - a unit with charges
+                    // on 2+ dates ends up with 2+ Gross Income/Gross Rate
+                    // lines instead of just one for the whole unit.
+                    dateOrder.forEach((dateKey) => {
+                        const dateRows = rowsByDate.get(dateKey);
+                        let groupRent = null;
+                        let groupAmountSum = 0;
+                        let groupHasCharge = false;
+
+                        dateRows.forEach((row) => {
+                            const rent = toNumberOrNull(row.formula_1);
+                            if (rent !== null) groupRent = rent;
+
+                            const amount = toNumberOrNull(row.custrecord_bb1_utilised_rate_ex_vat);
+                            if (amount !== null) {
+                                groupAmountSum += amount;
+                                groupHasCharge = true;
+                            }
+                        });
+
+                        const groupGrossIncome = (groupRent !== null || groupHasCharge)
+                            ? (groupRent || 0) + groupAmountSum : null;
+                        const groupGrossRate = (groupGrossIncome !== null && unit.area)
+                            ? groupGrossIncome / unit.area : null;
+
+                        const lastGroupRow = dateRows[dateRows.length - 1];
+                        lastGroupRow.formula_3 = groupGrossIncome;
+                        lastGroupRow.formula_4 = groupGrossRate;
+                    });
                 }
 
                 unit.occupied = currentRent !== null;
                 unit.currentRent = currentRent || 0;
                 unit.amountSum = amountSum;
 
+                // For an inactive lease, grossIncome/unit.grossIncome above
+                // resolve to null/0 (currentRent/amountSum/hasCharge were
+                // reset before this point) - its single collapsed row's own
+                // formula_3/formula_4 are already blanked by the
+                // LEASE_DERIVED_COLUMNS wipe above, so there's nothing more
+                // to set here for that case.
                 const grossIncome = (currentRent !== null || hasCharge) ? (currentRent || 0) + amountSum : null;
                 unit.grossIncome = grossIncome || 0;
-                const grossRate = (grossIncome !== null && unit.area) ? grossIncome / unit.area : null;
-
-                const lastRow = unit.rows[unit.rows.length - 1];
-                lastRow.formula_3 = grossIncome;
-                lastRow.formula_4 = grossRate;
             });
 
             // group units by accommodation type, keeping the order they came back in
