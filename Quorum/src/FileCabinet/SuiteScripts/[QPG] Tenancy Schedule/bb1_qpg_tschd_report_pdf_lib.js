@@ -26,6 +26,9 @@
  * 08/28/2026     Jared Espineli        Updated header logo image
  * 08/28/2026     Jared Espineli        Added N/log module (was referenced without being required, throwing ReferenceError
  *                                      and breaking Print PDF entirely)
+ * 08/31/2026     Jared Espineli        Fixed wrapped column header labels rendering with stretched letter spacing (BFO
+ *                                      justifies wrapped <th> text by default; header labels now wrap in a left-aligned
+ *                                      <p>); shrank header logo so it no longer overlaps the table header
  *
  * Copyright (c) 2022 BlueBridge One Business Solutions, All Rights Reserved [Replace appropriately]
  * support@bluebridgeone.com, +44 (0)1932 300007
@@ -55,7 +58,7 @@ define(['N/render', 'N/log', './bb1_qpg_tschd_report_lib_helper', './bb1_qpg_tsc
             .replace(/'/g, '&apos;');
 
         const buildHeaderMacro = (asOfDate) => {
-            const logoCell = `<img src="${escapeXml(LOGO_URL)}" alt="Company Logo" style="height: 70pt; width: 200pt;" />`;
+            const logoCell = `<img src="${escapeXml(LOGO_URL)}" alt="Company Logo" style="height: 55pt; width: 157pt;" />`;
             const printedText = escapeXml(helperLib.LIB_FX.formatPrintedTimestamp(new Date()));
             const asOfDateText = escapeXml(helperLib.LIB_FX.formatAsOfDate(asOfDate));
 
@@ -88,8 +91,14 @@ define(['N/render', 'N/log', './bb1_qpg_tschd_report_lib_helper', './bb1_qpg_tsc
             `;
         }
 
+        // BFO (the PDF renderer behind render.xmlToPdf) wraps <th>/<td> content
+        // in an internally-justified block by default, so a wrapped header
+        // label's non-last line gets stretched to fill the column width -
+        // with only one word on that line, the stretch shows as letter
+        // spacing (e.g. "G r o s s" above "Income"). Explicitly wrapping the
+        // label in its own left-aligned <p> overrides that default.
         const buildColumnHeaderRow = () => {
-            return COLUMNS.map((label) => `<th align="left">${label}</th>`).join('');
+            return COLUMNS.map((label) => `<th><p style="text-align: left; margin: 0;">${escapeXml(label)}</p></th>`).join('');
         }
 
         // Small table with just the "Property" label, placed above the main table
@@ -292,7 +301,7 @@ define(['N/render', 'N/log', './bb1_qpg_tschd_report_lib_helper', './bb1_qpg_tsc
                                 padding: 3pt;
                                 border-bottom: 0.5pt solid #000000;
                                 border-right: 0.5pt solid #000000;
-                                text-align: right;
+                                text-align: left;
                             }
                             table.tschd-table td {
                                 padding: 3pt;
