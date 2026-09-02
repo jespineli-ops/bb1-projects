@@ -15,6 +15,11 @@
  *                                      toString()/timezone text, which re-parsed to the wrong calendar day server-side
  * 08/28/2026     Jared Espineli        Added getMissingRequiredFields() so the client script can block Print PDF/
  *                                      Export CSV and alert the user when a required field (As of Date) is blank
+ * 09/02/2026     Jared Espineli        Added Charge Date column (between Review and Months Option), sourced from
+ *                                      the Utilised Charges record - PDF only, csv_lib.js keeps its own COLUMNS
+ * 09/02/2026     Jared Espineli        Removed the Charge Date column from the PDF - Charge Date is still used
+ *                                      internally (data_lib's isSameMonth/charge grouping) to scope the report to
+ *                                      the As of Date's month, just no longer printed as its own column
  *
  * Copyright (c) 2022 BlueBridge One Business Solutions, All Rights Reserved [Replace appropriately]
  * support@bluebridgeone.com, +44 (0)1932 300007
@@ -25,7 +30,9 @@ define(['N/search'],
      */
     (search) => {
 
-        //Column headers in both CSV and PDF files
+        // Column headers for the PDF only - csv_lib.js defines its own
+        // COLUMNS for the CSV's separate raw-data column set (see its header
+        // comment), so a change here doesn't affect the CSV export.
         const COLUMNS = [
             'Premises', 'Area', 'Units / Parking', 'Tenant', 'Starts', 'Expires',
             'Review', 'Months Option', 'Current Rent', 'Rent Rate', 'Rent Esc%',

@@ -29,6 +29,10 @@
  * 08/31/2026     Jared Espineli        Fixed wrapped column header labels rendering with stretched letter spacing (BFO
  *                                      justifies wrapped <th> text by default; header labels now wrap in a left-aligned
  *                                      <p>); shrank header logo so it no longer overlaps the table header
+ * 09/02/2026     Jared Espineli        New Charge Date column (lib_helper's COLUMNS + data_lib's ROW_COLUMNS) - no
+ *                                      changes needed here, header/detail rows are already built generically off those
+ * 09/02/2026     Jared Espineli        Charge Date column removed again (lib_helper's COLUMNS + data_lib's
+ *                                      ROW_COLUMNS) - no changes needed here either, same reason
  *
  * Copyright (c) 2022 BlueBridge One Business Solutions, All Rights Reserved [Replace appropriately]
  * support@bluebridgeone.com, +44 (0)1932 300007
