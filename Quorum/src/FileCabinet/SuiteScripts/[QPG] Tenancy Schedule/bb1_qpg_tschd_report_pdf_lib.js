@@ -33,6 +33,11 @@
  *                                      changes needed here, header/detail rows are already built generically off those
  * 09/02/2026     Jared Espineli        Charge Date column removed again (lib_helper's COLUMNS + data_lib's
  *                                      ROW_COLUMNS) - no changes needed here either, same reason
+ * 09/03/2026     Jared Espineli        Fixed Total Occupancy's Tenant column - was printing propertyTotals.
+ *                                      occupancyTenant (Property Totals Area minus vacant units, an unfinished
+ *                                      placeholder with no % sign) instead of a percentage. Now built the same way
+ *                                      as Total Vacancy: occupancyArea / Property Totals Area * 100, formatted as
+ *                                      "NN.NN%" (see data_lib's getPropertyTotals)
  *
  * Copyright (c) 2022 BlueBridge One Business Solutions, All Rights Reserved [Replace appropriately]
  * support@bluebridgeone.com, +44 (0)1932 300007
@@ -210,13 +215,14 @@ define(['N/render', 'N/log', './bb1_qpg_tschd_report_lib_helper', './bb1_qpg_tsc
 
         // Builds the "Total Occupancy" row's values - Area column is the
         // count of units with an active lease contract, Tenant column is
-        // Property Totals' Area minus the Total Vacancy count.
+        // that count as a % of Property Totals' Area (rounded to 2
+        // decimals) - same shape as buildVacancyRowValues.
         const buildOccupancyRowValues = (propertyTotals) => {
             const values = COLUMNS.map(() => '');
             values[PREMISES_COLUMN_INDEX] = 'Total Occupancy';
             values[AREA_COLUMN_INDEX] = propertyTotals.occupancyArea;
             values[UNITS_PARKING_COLUMN_INDEX] = toWholeNumber(propertyTotals.occupancyArea);
-            values[TENANT_COLUMN_INDEX] = propertyTotals.occupancyTenant;
+            values[TENANT_COLUMN_INDEX] = propertyTotals.occupancyPercent === null ? '' : `${formatAmount(propertyTotals.occupancyPercent)}%`;
             return values;
         }
 

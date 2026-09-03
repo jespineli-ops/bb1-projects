@@ -19,6 +19,10 @@
  * 08/28/2026     Jared Espineli        Added 3 new columns from the updated workbook - Future Lease, Tenant ID, Group Tenant
  * 08/28/2026     Jared Espineli        Merged the title row and printed-timestamp row into a single title row (was two
  *                                      separate rows, read as two titles)
+ * 09/03/2026     Jared Espineli        Renamed headers: Unit Counter -> Property Rentable Unit Area, Unit Area -> m2,
+ *                                      Unit Status -> Status. Building State/Country, Status, Property Portfolio and
+ *                                      Accommodation Type now come through as display text, not internal ids (see
+ *                                      BUILTIN.DF() additions in data_lib's buildCsvQuery)
  *
  * Copyright (c) 2022 BlueBridge One Business Solutions, All Rights Reserved [Replace appropriately]
  * support@bluebridgeone.com, +44 (0)1932 300007
@@ -39,7 +43,7 @@ define(['N/file', './bb1_qpg_tschd_report_lib_helper', './bb1_qpg_tschd_report_d
         const COLUMNS = [
             'Building', 'Building Address 1', 'Building Address 2', 'Building Zip', 'Building City',
             'Building State', 'Building Country',
-            'Unit Counter', 'Unit Area', 'Unit Status', 'Property Portfolio', 'Accommodation Type', 'Unit',
+            'Property Rentable Unit Area', 'm2', 'Status', 'Property Portfolio', 'Accommodation Type', 'Unit',
             'Occupancy', 'Bed', 'Lease',
             'Future Lease', 'Tenant ID',
             'Tenant', 'Group Tenant', 'Tenant Email', 'Tenant Phone', 'Tenant Address', 'Tenant Address 1', 'Tenant Address 2',

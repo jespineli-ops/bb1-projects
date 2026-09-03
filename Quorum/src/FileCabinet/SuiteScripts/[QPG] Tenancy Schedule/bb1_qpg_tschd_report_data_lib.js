@@ -52,6 +52,38 @@
  *                                      longer printed as its own PDF column. Still selected by buildQuery/
  *                                      buildCsvQuery and used internally by isSameMonth and the charge-line
  *                                      grouping key, just excluded from the mapped output row
+ * 09/03/2026     Jared Espineli        buildCsvQuery: fixed Other Charges (custrecord_bb1_utilised_rate_ex_vat/
+ *                                      formula_5) not excluding Rent-type charge lines like the PDF query already
+ *                                      does, and fixed formula_3/formula_4 (Total/Gross Income, Gross Rate)
+ *                                      double-counting Rent by adding the (then-unfiltered) Other Charges value on
+ *                                      top of the Rent value for the same row - now just the row's own rate,
+ *                                      correctly summed per unit in getCsvRows. Also switched formula_2/formula_5/
+ *                                      formula_4's per-unit divisor from custrecord_bb1_unit_counter to
+ *                                      custrecord_bb1_unit_area for the CSV export (PDF's buildQuery is unchanged
+ *                                      and still divides by unit counter)
+ * 09/03/2026     Jared Espineli        buildCsvQuery: Building State/Country, Unit Status, Property Portfolio and
+ *                                      Accommodation Type now wrapped in BUILTIN.DF() so getCsvRows/the CSV export
+ *                                      return display text instead of internal ids. State/Country wrapped at their
+ *                                      source (SubsidiaryMainAddress) and Portfolio at its source (CUSTOMRECORD_
+ *                                      CSEG_BB1_BUILDING) rather than at the outer passthrough alias - both are
+ *                                      several subquery levels deep and BUILTIN.DF() is only proven here to resolve
+ *                                      through one level of passthrough (see custrecord_bb1_utilised_type). Status/
+ *                                      Accommodation Type are direct CUSTOMRECORD_CSEG_BB1_UNIT columns (no
+ *                                      passthrough), so wrapped at the outer SELECT instead. PDF's buildQuery is
+ *                                      untouched - it doesn't select Building State/Country and already selects
+ *                                      Portfolio raw/unused
+ * 09/03/2026     Jared Espineli        getPropertyTotals: replaced occupancyTenant (Property Totals Area minus
+ *                                      vacant units - an unfinished placeholder, not a percentage) with
+ *                                      occupancyPercent (occupancyArea / Property Totals Area * 100), mirroring
+ *                                      vacancyPercent, so the PDF's Total Occupancy row prints a % like Total
+ *                                      Vacancy does instead of a raw number
+ * 09/03/2026     Jared Espineli        getAccommodationGroups: vacantUnits/activeLeaseUnits (feeding vacancyArea/
+ *                                      occupancyArea/vacancyPercent/occupancyPercent) now sum unit.area instead of
+ *                                      counting unit records (+= 1) - a single Unit record's counter can represent
+ *                                      several physical units/bays (e.g. a 10-bed Student record under one lease),
+ *                                      so a record count undercounted its contribution to Total Occupancy. Vacancy
+ *                                      happened to look right before this since it's common for vacant records to
+ *                                      have a counter of 1
  *
  * Copyright (c) 2022 BlueBridge One Business Solutions, All Rights Reserved [Replace appropriately]
  * support@bluebridgeone.com, +44 (0)1932 300007
@@ -372,9 +404,9 @@ define(['N/query'],
                   MAP_customrecord_cseg_bb1_unit_cseg_bb1_unit_filterby_cseg_bb1_floor_SUB.country_0_0_0_0_0_0_0 AS country,
                   CUSTOMRECORD_CSEG_BB1_UNIT.custrecord_bb1_unit_counter AS custrecord_bb1_unit_counter,
                   CUSTOMRECORD_CSEG_BB1_UNIT.custrecord_bb1_unit_area AS custrecord_bb1_unit_area,
-                  CUSTOMRECORD_CSEG_BB1_UNIT.custrecord_bb1_unit_status AS custrecord_bb1_unit_status,
+                  BUILTIN.DF(CUSTOMRECORD_CSEG_BB1_UNIT.custrecord_bb1_unit_status) AS custrecord_bb1_unit_status,
                   MAP_customrecord_cseg_bb1_unit_cseg_bb1_unit_filterby_cseg_bb1_floor_SUB.custrecord_bb1_building_portfolio_0_0_0_0_0 AS custrecord_bb1_building_portfolio,
-                  CUSTOMRECORD_CSEG_BB1_UNIT.custrecord_bb1_unit_accommodation_type AS custrecord_bb1_unit_accommodation_type,
+                  BUILTIN.DF(CUSTOMRECORD_CSEG_BB1_UNIT.custrecord_bb1_unit_accommodation_type) AS custrecord_bb1_unit_accommodation_type,
                   CUSTOMRECORD_CSEG_BB1_UNIT.name AS name_1,
                   NVL2(BUILTIN.DF(CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_lease_tenant), 'Occupied', 'Vacant') AS formula_6,
                   CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.cseg_bb1_bed AS cseg_bb1_bed,
@@ -399,13 +431,13 @@ define(['N/query'],
                   CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_lease_rent_escalation AS custrecord_bb1_lease_rent_escalation,
                   CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_date AS custrecord_bb1_utilised_date,
                   CASE WHEN BUILTIN.DF(CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_type) = 'Rent' THEN TO_NUMBER(CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_rate_ex_vat) END AS formula_1,
-                  CASE WHEN BUILTIN.DF(CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_type) = 'Rent' THEN TO_NUMBER(CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_rate_ex_vat) / CUSTOMRECORD_CSEG_BB1_UNIT.custrecord_bb1_unit_counter END AS formula_2,
+                  CASE WHEN BUILTIN.DF(CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_type) = 'Rent' THEN TO_NUMBER(CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_rate_ex_vat) / CUSTOMRECORD_CSEG_BB1_UNIT.custrecord_bb1_unit_area END AS formula_2,
                   CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_rateareaexcl_vat AS custrecord_bb1_utilised_rateareaexcl_vat,
-                  CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_rate_ex_vat AS custrecord_bb1_utilised_rate_ex_vat,
-                  CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_rate_ex_vat / CUSTOMRECORD_CSEG_BB1_UNIT.custrecord_bb1_unit_counter AS formula_5,
+                  CASE WHEN BUILTIN.DF(CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_type) <> 'Rent' THEN CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_rate_ex_vat END AS custrecord_bb1_utilised_rate_ex_vat,
+                  CASE WHEN BUILTIN.DF(CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_type) <> 'Rent' THEN CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_rate_ex_vat / CUSTOMRECORD_CSEG_BB1_UNIT.custrecord_bb1_unit_area END AS formula_5,
                   CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_amt_inclusiv_vat AS custrecord_bb1_utilised_amt_inclusiv_vat,
-                  TO_NUMBER(CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_rate_ex_vat) + CASE WHEN BUILTIN.DF(CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_type) = 'Rent' THEN TO_NUMBER(CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_rate_ex_vat) END AS formula_3,
-                  (TO_NUMBER(CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_rate_ex_vat) + CASE WHEN BUILTIN.DF(CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_type) = 'Rent' THEN TO_NUMBER(CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_rate_ex_vat) END) / CUSTOMRECORD_CSEG_BB1_UNIT.custrecord_bb1_unit_counter AS formula_4,
+                  TO_NUMBER(CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_rate_ex_vat) AS formula_3,
+                  TO_NUMBER(CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_rate_ex_vat) / CUSTOMRECORD_CSEG_BB1_UNIT.custrecord_bb1_unit_area AS formula_4,
                   CUSTOMRECORD_CSEG_BB1_UNIT.custrecord_bb1_unit_budget_rate AS custrecord_bb1_unit_budget_rate
                 FROM
                   CUSTOMRECORD_CSEG_BB1_UNIT,
@@ -553,7 +585,7 @@ define(['N/query'],
                               MAP_customrecord_cseg_bb1_building_cseg_bb1_building_filterby_subsidiary_SUB.city_0 AS city_0_0,
                               MAP_customrecord_cseg_bb1_building_cseg_bb1_building_filterby_subsidiary_SUB.dropdownstate_0 AS dropdownstate_0_0,
                               MAP_customrecord_cseg_bb1_building_cseg_bb1_building_filterby_subsidiary_SUB.country_0 AS country_0_0,
-                              CUSTOMRECORD_CSEG_BB1_BUILDING.custrecord_bb1_building_portfolio AS custrecord_bb1_building_portfolio
+                              BUILTIN.DF(CUSTOMRECORD_CSEG_BB1_BUILDING.custrecord_bb1_building_portfolio) AS custrecord_bb1_building_portfolio
                             FROM
                               CUSTOMRECORD_CSEG_BB1_BUILDING,
                               (SELECT
@@ -573,8 +605,8 @@ define(['N/query'],
                                   SubsidiaryMainAddress.addr2 AS addr2,
                                   SubsidiaryMainAddress.zip AS zip,
                                   SubsidiaryMainAddress.city AS city,
-                                  SubsidiaryMainAddress.dropdownstate AS dropdownstate,
-                                  SubsidiaryMainAddress.country AS country
+                                  BUILTIN.DF(SubsidiaryMainAddress.dropdownstate) AS dropdownstate,
+                                  BUILTIN.DF(SubsidiaryMainAddress.country) AS country
                                 FROM
                                   Subsidiary,
                                   SubsidiaryMainAddress
@@ -1005,8 +1037,16 @@ define(['N/query'],
                     totals.amount += unit.amountSum;
                     totals.grossIncome += unit.grossIncome;
                     if (unit.occupied) totals.occupiedArea += unit.area;
-                    if (unit.hasActiveLease) totals.activeLeaseUnits += 1;
-                    else totals.vacantUnits += 1;
+                    // Summed by unit.area (custrecord_bb1_unit_counter), not
+                    // += 1 per unit record - a single Unit record can
+                    // represent more than one physical unit/bay (its
+                    // counter), so a record count would undercount e.g. a
+                    // 10-bed Student record with one lease as "1 occupied"
+                    // instead of 10. Keeps vacantUnits/activeLeaseUnits on
+                    // the same scale as totals.area for vacancyPercent/
+                    // occupancyPercent below.
+                    if (unit.hasActiveLease) totals.activeLeaseUnits += unit.area;
+                    else totals.vacantUnits += unit.area;
                 });
 
                 totals.rentRate = totals.occupiedArea ? totals.currentRent / totals.occupiedArea : null;
@@ -1029,11 +1069,15 @@ define(['N/query'],
          * Unlike the per-group subtotals, Rent Rate/Rate/Gross Rate here
          * divide by total Area (not Occupied Area), per the report spec.
          *
-         * Also computes the Total Vacancy/Total Occupancy figures:
-         *  - vacancyArea = count of units without an active lease contract
+         * Also computes the Total Vacancy/Total Occupancy figures - Area-
+         * weighted (sum of custrecord_bb1_unit_counter), not a count of unit
+         * records, so a single Unit record whose counter represents several
+         * physical units/bays contributes its full counter value, same as
+         * everywhere else Area is used in this report:
+         *  - vacancyArea = sum of Area for units without an active lease contract
          *  - vacancyPercent = vacancyArea / Property Totals Area * 100, rounded to 2 decimals
-         *  - occupancyArea = count of units with an active lease contract
-         *  - occupancyTenant = Property Totals Area - vacancyArea
+         *  - occupancyArea = sum of Area for units with an active lease contract
+         *  - occupancyPercent = occupancyArea / Property Totals Area * 100, rounded to 2 decimals
          */
         LIB_FX.getPropertyTotals = (groups) => {
             const totals = {area: 0, currentRent: 0, amount: 0, grossIncome: 0, vacantUnits: 0, activeLeaseUnits: 0};
@@ -1054,7 +1098,7 @@ define(['N/query'],
             totals.vacancyArea = totals.vacantUnits;
             totals.vacancyPercent = totals.area ? roundTo2((totals.vacantUnits / totals.area) * 100) : null;
             totals.occupancyArea = totals.activeLeaseUnits;
-            totals.occupancyTenant = totals.area - totals.vacantUnits;
+            totals.occupancyPercent = totals.area ? roundTo2((totals.activeLeaseUnits / totals.area) * 100) : null;
 
             return totals;
         }
