@@ -5,12 +5,12 @@
  *
  * Server-only library that builds the Generate Statement Suitelet form -
  * Start Date/Statement Date/Roll Prior Charges fields, Generate
- * Statement/Print Statement buttons (no actions wired up yet), and a
- * Customer List results sublist. Styled the same as the Tenancy Schedule
+ * Statement/Email Statement buttons, and a Customer List results sublist.
+ * Styled the same as the Tenancy Schedule
  * report's form (bb1_qpg_tschd_report_form_lib.js). Kept separate from
  * bb1_qpg_cstmt_gts_lib_helper.js since it uses the server-only
- * N/ui/serverWidget, N/search, N/runtime and N/url modules, which the
- * client script can't load.
+ * N/ui/serverWidget, N/search and N/runtime modules, which the client
+ * script can't load.
  *
  * Date                 Author              Purpose
  * 02-September-2026    Jared Espineli      Initial Release - Start Date/Statement Date/Roll Prior Charges
@@ -27,6 +27,42 @@
  *                                          search.runPaged()/fetch() to load one page at a time, with
  *                                          Previous/Next links that reload the Suitelet at the requested page
  *                                          index while preserving the Customer/Category filter
+ * 03-September-2026    Jared Espineli      Start Date/Statement Date marked mandatory (isMandatory - the visual
+ *                                          asterisk; the blank-on-click alert lives in the client script, see
+ *                                          gts_cs.js/gts_lib_helper.js); Roll Prior Charges into B/f now defaults
+ *                                          to checked
+ * 03-September-2026    Jared Espineli      Customer List pager restyled (PAGER_STYLE) to look like NetSuite's
+ *                                          native list pagination - Previous/Next now render as styled blue
+ *                                          links (greyed out, not plain text, when disabled) and a "X to Y of Z"
+ *                                          page-range dropdown replaces the old "Page N of M" text; both were
+ *                                          already correctly non-clickable in the reported case since a single
+ *                                          matching customer with PAGE_SIZE 2 is genuinely only 1 page - this
+ *                                          doesn't change that, just how a real 1-vs-many-page state looks/reads.
+ *                                          Also added a leftmost row-select checkbox column (RESULTS.SELECT) with
+ *                                          a header "select all" (addMarkAllButtons()), matching the native list
+ *                                          view's own checkbox column - not yet wired into Generate/Print
+ *                                          Statement, which are still otherwise unscoped
+ * 03-September-2026    Jared Espineli      Fixed SSS_MISSING_REQD_ARGUMENT on the checkbox column - Sublist.
+ *                                          addField treats label: '' as a missing argument; a single space
+ *                                          satisfies it while still rendering blank
+ * 03-September-2026    Jared Espineli      Added a Back to Search button, before Generate Statement, that
+ *                                          returns to the Customer Statement Suitelet via the new
+ *                                          gts_lib_helper.js buildBackToSearchUrl()
+ * 03-September-2026    Jared Espineli      Renamed the Print Statement button to Email Statement
+ *                                          (FORM.PRINT_STATEMENT -> FORM.EMAIL_STATEMENT, functionName
+ *                                          printStatement -> emailStatement) - printing now happens off
+ *                                          Generate Statement instead (see gts_cs.js)
+ * 04-September-2026    Jared Espineli      Fixed marks not surviving pagination: Previous/Next/the page-range
+ *                                          dropdown were plain hrefs, so they never saw what was checked on the
+ *                                          page being left. buildPageUrl removed; the pager now emits page
+ *                                          indices that call gts_cs.js's goToPage() (onclick), which merges the
+ *                                          live selection in via gts_lib_helper.js's new buildPageNavUrl before
+ *                                          navigating. addResultsSublist now reads that carried-forward
+ *                                          selection (getSelectedIdsFromParams) to pre-check a page's own rows,
+ *                                          and writes a hidden RESULTS.SELECTED_IDS field holding every OTHER
+ *                                          page's marks (this page's own ids are deliberately excluded from it -
+ *                                          they're represented by this page's live checkboxes instead, which is
+ *                                          what lets unchecking a previously-marked row actually stick)
  *
  * Copyright (c) 2026 BlueBridge One Business Solutions, All Rights Reserved
  * support@bluebridgeone.com, UK Support: +44 (0)1932 300007 SA Support: +27 (0)10 500 8674
@@ -34,16 +70,15 @@
  * @NApiVersion 2.1
  * @NModuleScope SameAccount
  */
-define(['N/search', 'N/runtime', 'N/url', 'N/log', 'N/ui/serverWidget', './bb1_qpg_cstmt_gts_lib_helper'],
+define(['N/search', 'N/runtime', 'N/log', 'N/ui/serverWidget', './bb1_qpg_cstmt_gts_lib_helper'],
     /**
      * @param{search} search
      * @param{runtime} runtime
-     * @param{url} url
      * @param{log} log
      * @param{serverWidget} serverWidget
      * @param{helperLib} helperLib
      */
-    (search, runtime, url, log, serverWidget, helperLib) => {
+    (search, runtime, log, serverWidget, helperLib) => {
 
         const _FIELDS = helperLib._FIELDS;
         const PAGE_SIZE = helperLib.LIB_FX.PAGE_SIZE;
@@ -52,11 +87,25 @@ define(['N/search', 'N/runtime', 'N/url', 'N/log', 'N/ui/serverWidget', './bb1_q
         // PDF/Export CSV buttons (bb1_qpg_tschd_report_form_lib.js)
         const BUTTON_STYLE = `
             <style>
-                #${_FIELDS.FORM.GENERATE_STATEMENT}, #${_FIELDS.FORM.PRINT_STATEMENT} {
+                #${_FIELDS.FORM.GENERATE_STATEMENT}, #${_FIELDS.FORM.EMAIL_STATEMENT} {
                     background-color: #2C5266;
                     border-color: #2C5266;
                     color: #FFFFFF;
                 }
+            </style>
+        `;
+
+        // Styles the Previous/Next pager + page-range dropdown to read like
+        // NetSuite's own native list pagination (blue clickable links,
+        // greyed-out disabled state) instead of plain unstyled text - see
+        // buildPagerHtml below for the markup this targets.
+        const PAGER_STYLE = `
+            <style>
+                .bb1-cstmt-pager { font-size: 11px; }
+                .bb1-cstmt-pager a { color: #1975FA; text-decoration: none; font-weight: bold; }
+                .bb1-cstmt-pager a:hover { text-decoration: underline; }
+                .bb1-cstmt-pager .bb1-cstmt-pager-disabled { color: #999999; font-weight: bold; }
+                .bb1-cstmt-pager select { margin: 0 6px; }
             </style>
         `;
 
@@ -99,51 +148,50 @@ define(['N/search', 'N/runtime', 'N/url', 'N/log', 'N/ui/serverWidget', './bb1_q
             }
         }
 
-        // Builds the URL for a given Customer List page index (0-based) -
-        // this same Suitelet deployment, with the current Customer/Category
-        // filter preserved and the page param set. Server-side only (uses
-        // runtime.getCurrentScript() to self-reference this deployment).
-        const buildPageUrl = (params, pageIndex) => {
-            const pageParams = {};
-
-            if (params && params[_FIELDS.SEARCH_PARAM.CUSTOMER]) {
-                pageParams[_FIELDS.SEARCH_PARAM.CUSTOMER] = params[_FIELDS.SEARCH_PARAM.CUSTOMER];
-            } else if (params && params[_FIELDS.SEARCH_PARAM.CATEGORY]) {
-                pageParams[_FIELDS.SEARCH_PARAM.CATEGORY] = params[_FIELDS.SEARCH_PARAM.CATEGORY];
-            }
-
-            pageParams[_FIELDS.PAGE_PARAM] = pageIndex;
-
-            return url.resolveScript({
-                scriptId: runtime.getCurrentScript().id,
-                deploymentId: runtime.getCurrentScript().deploymentId,
-                params: pageParams
-            });
-        }
-
-        // Builds the Previous/Next pager markup for the given page state -
-        // either link is plain text (not a link) when there's no adjacent
-        // page in that direction.
-        const buildPagerHtml = (params, pageIndex, pageCount) => {
+        // Builds the Previous/Next + page-range dropdown pager markup,
+        // styled (see PAGER_STYLE) to read like NetSuite's own native list
+        // pagination ("X to Y of Z" range selector, blue clickable links)
+        // rather than plain text. Previous/Next render as greyed-out
+        // (non-link) text when there's no adjacent page in that direction -
+        // with a single page, both are always greyed out and the dropdown
+        // is skipped in favour of a plain "Showing X of X" summary, since
+        // there's nowhere else to navigate to. Each control calls gts_cs.js's
+        // goToPage(pageIndex) (NetSuite exposes a clientScriptModulePath
+        // export as a plain global function, same mechanism form.addButton's
+        // functionName uses) rather than linking to a precomputed URL, so
+        // the CURRENT page's live checkbox state is read and merged in at
+        // the moment of navigating away - not baked in at render time,
+        // which is what let marks made after this page rendered go missing.
+        const buildPagerHtml = (pageIndex, pageCount, totalCount) => {
             const hasPrevious = pageIndex > 0;
             const hasNext = pageIndex < pageCount - 1;
 
             const previousHtml = hasPrevious
-                ? `<a href="${buildPageUrl(params, pageIndex - 1)}">&laquo; Previous</a>`
-                : '&laquo; Previous';
+                ? `<a href="javascript:void(0);" onclick="goToPage(${pageIndex - 1}); return false;">&laquo; Previous</a>`
+                : '<span class="bb1-cstmt-pager-disabled">&laquo; Previous</span>';
             const nextHtml = hasNext
-                ? `<a href="${buildPageUrl(params, pageIndex + 1)}">Next &raquo;</a>`
-                : 'Next &raquo;';
+                ? `<a href="javascript:void(0);" onclick="goToPage(${pageIndex + 1}); return false;">Next &raquo;</a>`
+                : '<span class="bb1-cstmt-pager-disabled">Next &raquo;</span>';
 
-            return `<p>${previousHtml} &nbsp;|&nbsp; Page ${pageIndex + 1} of ${pageCount} &nbsp;|&nbsp; ${nextHtml}</p>`;
+            if (pageCount <= 1) {
+                return `<div class="bb1-cstmt-pager">${previousHtml} &nbsp; Showing ${totalCount} of ${totalCount} &nbsp; ${nextHtml}</div>`;
+            }
+
+            let rangeOptions = '';
+            for (let p = 0; p < pageCount; p++) {
+                const rangeStart = (p * PAGE_SIZE) + 1;
+                const rangeEnd = Math.min((p + 1) * PAGE_SIZE, totalCount);
+                const selectedAttr = p === pageIndex ? ' selected' : '';
+                rangeOptions += `<option value="${p}"${selectedAttr}>${rangeStart} to ${rangeEnd} of ${totalCount}</option>`;
+            }
+
+            return `<div class="bb1-cstmt-pager">${previousHtml} ` +
+                `&nbsp;<select onchange="if (this.value !== '') goToPage(this.value);">${rangeOptions}</select>&nbsp; ` +
+                `${nextHtml}</div>`;
         }
 
         // Adds the Customer List sublist (one page's worth of rows, per
-        // helperLib.LIB_FX.PAGE_SIZE) below the fields, plus a
-        // Previous/Next pager, populated from the loaded/filtered saved
-        // search (see loadCustomerListSearch). If the search couldn't be
-        // loaded, an inline message is shown instead so the rest of the
-        // form still renders.
+        // helperLib.LIB_FX.PAGE_SIZE) below the fields
         const addResultsSublist = (form, filters, params) => {
             const loadedSearch = loadCustomerListSearch(filters);
 
@@ -166,11 +214,21 @@ define(['N/search', 'N/runtime', 'N/url', 'N/log', 'N/ui/serverWidget', './bb1_q
 
             const rows = totalCount ? pagedData.fetch({index: pageIndex}).data : [];
 
+            // Every id marked so far, from this page or any other, carried
+            // forward via RESULTS.SELECTED_IDS (see gts_lib_helper.js's
+            // buildPageNavUrl) - used below both to pre-check this page's
+            // own rows and to work out what to exclude from what this page
+            // itself carries forward.
+            const selectedIds = helperLib.LIB_FX.getSelectedIdsFromParams(params);
+
             const sublist = form.addSublist({
                 id: _FIELDS.RESULTS.SUBLIST_ID,
                 type: serverWidget.SublistType.LIST,
                 label: `Customer List (${totalCount})`
             });
+
+            sublist.addField({id: _FIELDS.RESULTS.SELECT, type: serverWidget.FieldType.CHECKBOX, label: ' '});
+            sublist.addMarkAllButtons();
 
             sublist.addField({id: _FIELDS.RESULTS.ID, type: serverWidget.FieldType.TEXT, label: 'ID'});
             sublist.addField({id: _FIELDS.RESULTS.CUSTOMER, type: serverWidget.FieldType.TEXT, label: 'Customer'});
@@ -179,6 +237,10 @@ define(['N/search', 'N/runtime', 'N/url', 'N/log', 'N/ui/serverWidget', './bb1_q
             sublist.addField({id: _FIELDS.RESULTS.BALANCE, type: serverWidget.FieldType.TEXT, label: 'Balance'});
 
             rows.forEach((result, line) => {
+                // Restores a mark made on an earlier visit to THIS page -
+                // e.g. the user marked it, paged away, then paged back.
+                const wasMarked = selectedIds.indexOf(String(result.id)) !== -1;
+                sublist.setSublistValue({id: _FIELDS.RESULTS.SELECT, line: line, value: wasMarked ? 'T' : 'F'});
                 sublist.setSublistValue({id: _FIELDS.RESULTS.ID, line: line, value: result.id || ''});
                 sublist.setSublistValue({id: _FIELDS.RESULTS.CUSTOMER, line: line, value: result.getValue({name: 'altname'}) || ''});
                 sublist.setSublistValue({id: _FIELDS.RESULTS.SUBSIDIARY, line: line, value: result.getText({name: 'subsidiary'}) || ''});
@@ -186,11 +248,34 @@ define(['N/search', 'N/runtime', 'N/url', 'N/log', 'N/ui/serverWidget', './bb1_q
                 sublist.setSublistValue({id: _FIELDS.RESULTS.BALANCE, line: line, value: result.getValue({name: 'balance'}) || ''});
             });
 
+            // Carries forward every marked id that does NOT belong to this
+            // page - this page's own ids are deliberately left out, since
+            // they're represented live by the checkboxes just set above.
+            // Without excluding them, unchecking a previously-marked row on
+            // a page the user returns to could never actually stick - the
+            // hidden field would keep re-adding it back in on every merge.
+            const thisPageIds = rows.map((result) => String(result.id));
+            const otherPageIds = selectedIds.filter((id) => thisPageIds.indexOf(id) === -1);
+
+            const selectedIdsField = form.addField({
+                id: _FIELDS.RESULTS.SELECTED_IDS,
+                type: serverWidget.FieldType.LONGTEXT,
+                label: 'Selected Customer Ids'
+            });
+            selectedIdsField.updateDisplayType({displayType: serverWidget.FieldDisplayType.HIDDEN});
+            selectedIdsField.defaultValue = otherPageIds.join(',');
+
+            form.addField({
+                id: _FIELDS.FORM.PAGER_STYLE,
+                type: serverWidget.FieldType.INLINEHTML,
+                label: 'Pager Style'
+            }).defaultValue = PAGER_STYLE;
+
             form.addField({
                 id: _FIELDS.RESULTS.PAGER,
                 type: serverWidget.FieldType.INLINEHTML,
                 label: 'Customer List Pager'
-            }).defaultValue = buildPagerHtml(params, pageIndex, pageCount);
+            }).defaultValue = buildPagerHtml(pageIndex, pageCount, totalCount);
         }
 
         // Builds the Generate Statement Suitelet form
@@ -205,6 +290,15 @@ define(['N/search', 'N/runtime', 'N/url', 'N/log', 'N/ui/serverWidget', './bb1_q
                 label: 'Button Style'
             }).defaultValue = BUTTON_STYLE;
 
+            // Left unstyled (not part of BUTTON_STYLE's selector) so it
+            // reads as the secondary/navigation action next to the two
+            // primary teal buttons
+            form.addButton({
+                id: _FIELDS.FORM.BACK_TO_SEARCH,
+                label: 'Back to Search',
+                functionName: 'backToSearch'
+            });
+
             form.addButton({
                 id: _FIELDS.FORM.GENERATE_STATEMENT,
                 label: 'Generate Statement',
@@ -212,28 +306,34 @@ define(['N/search', 'N/runtime', 'N/url', 'N/log', 'N/ui/serverWidget', './bb1_q
             });
 
             form.addButton({
-                id: _FIELDS.FORM.PRINT_STATEMENT,
-                label: 'Print Statement',
-                functionName: 'printStatement'
+                id: _FIELDS.FORM.EMAIL_STATEMENT,
+                label: 'Email Statement',
+                functionName: 'emailStatement'
             });
 
-            form.addField({
+            const startDateField = form.addField({
                 id: _FIELDS.FORM.START_DATE,
                 type: serverWidget.FieldType.DATE,
                 label: 'Start Date'
             });
+            startDateField.isMandatory = true;
 
-            form.addField({
+            const statementDateField = form.addField({
                 id: _FIELDS.FORM.STATEMENT_DATE,
                 type: serverWidget.FieldType.DATE,
                 label: 'Statement Date'
             });
+            statementDateField.isMandatory = true;
 
-            form.addField({
+            const rollupField = form.addField({
                 id: _FIELDS.FORM.ROLL_PRIOR_CHARGES,
                 type: serverWidget.FieldType.CHECKBOX,
                 label: 'Roll Prior Chargers into B/f'
             });
+            // Defaults to checked - matches the roll-up default in
+            // bb1_qpg_cstmt_gts_data_lib.js's buildStatementData (rollup
+            // defaults on unless explicitly turned off)
+            rollupField.defaultValue = 'T';
 
             const filters = helperLib.LIB_FX.getFiltersFromParams(params);
             addResultsSublist(form, filters, params);
