@@ -229,9 +229,9 @@
                     <tr>
                         <td style="width: 46%;" colspan="12"><span class="itemname">${item.item}</span><br />${item.description}</td>
                         <td style="width: 14%;" colspan="2" align="center">${item.quantity}</td>
-                        <td style="width: 15%;" colspan="4" align="center">${item.rate}</td>
-                        <td style="width: 16%;" colspan="2" align="center">${item.tax1amt}</td>
-                        <td style="width: 15%;" colspan="4" align="center">${item.amount}</td>
+                        <td style="width: 15%;" colspan="4" align="center">${item.rate?replace("¤", record.currency + " ")}</td>
+                        <td style="width: 16%;" colspan="2" align="center">${item.tax1amt?replace("¤", record.currency + " ")}</td>
+                        <td style="width: 15%;" colspan="4" align="center">${item.amount?replace("¤", record.currency + " ")}</td>
                     </tr>
                 </#list>
             </table>
@@ -242,17 +242,17 @@
             <tr>
                 <td colspan="4">&nbsp;</td>
                 <td align="right"><strong>${record.subtotal@label}</strong></td>
-                <td align="right">${record.subtotal}</td>
+                <td align="right">${record.subtotal?replace("¤", record.currency + " ")}</td>
             </tr>
             <tr>
                 <td colspan="4">&nbsp;</td>
                 <td align="right"><strong>${record.taxtotal@label} (${record.taxrate}%)</strong></td>
-                <td align="right">${record.taxtotal}</td>
+                <td align="right">${record.taxtotal?replace("¤", record.currency + " ")}</td>
             </tr>
             <tr class="totalrow">
                 <td colspan="4">&nbsp;</td>
                 <td align="right"><strong>${record.total@label}</strong></td>
-                <td align="right">${record.total}</td>
+                <td align="right">${record.total?replace("¤", record.currency + " ")}</td>
             </tr>
         </table>
 
