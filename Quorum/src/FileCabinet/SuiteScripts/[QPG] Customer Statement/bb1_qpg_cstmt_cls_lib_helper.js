@@ -12,11 +12,9 @@
  * bb1_qpg_cstmt_gts_lib_helper.js).
  *
  * Date             Author              Purpose
- * 02-September-2026    Jared Espineli      Initial Release - Customer/Category fields, Search Customer button
- * 02-September-2026    Jared Espineli      Search Customer now redirects to the Generate Statement Suitelet:
- *                                          Customer (if selected) is sent as the sole filter, Category is
- *                                          disregarded when a Customer is also selected; Category alone is sent
- *                                          when no Customer is selected
+ * 02-September-2026    Jared Espineli      Initial Release - Customer/Category fields, and Search Customer
+ *                                          redirects to the Generate Statement Suitelet with Customer (if
+ *                                          selected) as the sole filter, else Category.
  *
  * Copyright (c) 2026 BlueBridge One Business Solutions, All Rights Reserved
  * support@bluebridgeone.com, UK Support: +44 (0)1932 300007 SA Support: +27 (0)10 500 8674
@@ -54,12 +52,8 @@ define(['N/url'],
 
         const LIB_FX = {};
 
-        // Builds the Generate Statement Suitelet URL for the current
-        // Customer/Category selection. Customer (if selected) is the sole
-        // filter sent - Category is disregarded in that case. Otherwise,
-        // if Category alone is selected, that's sent instead. If neither is
-        // selected, no filter param is sent. Client-side only (currentRecord
-        // is the on-page form).
+        // Builds the Generate Statement Suitelet URL for the current Customer/Category selection - Customer
+        // wins when both are selected, Category alone otherwise. Client-side only.
         LIB_FX.buildSearchUrl = (currentRecord) => {
             const customerId = currentRecord.getValue({fieldId: _FIELDS.FORM.CUSTOMER});
             const categoryId = currentRecord.getValue({fieldId: _FIELDS.FORM.CATEGORY});

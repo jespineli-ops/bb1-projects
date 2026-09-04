@@ -8,24 +8,16 @@
  * running balance and Balance B/f roll-up, invoice item-line detail, and the
  * aging summary. Ported from the standalone Quorum tenant statement Suitelet
  * (bb1_qpg_stmt_sl.js, v23-2026-08-30) and adapted to this project's
- * LIB_FX/_FIELDS conventions. PDF/XML rendering is intentionally out of
- * scope here - see bb1_qpg_tschd_report_pdf_lib.js for this project's
- * established PDF-builder pattern once the Generate/Print Statement actions
- * are scoped.
+ * LIB_FX/_FIELDS conventions.
  *
  * Date                 Author              Purpose
- * 03-September-2026    Jared Espineli      Initial Release - ported the query/lookup engine (buildStatementData,
- *                                          getStatementHeader, getBillingAddress, getEntityFields,
- *                                          fillFromSubsidiaryQuery, getStatementRows, getInvoiceLines,
- *                                          getAgingSummary) from bb1_qpg_stmt_sl.js
- * 03-September-2026    Jared Espineli      Extracted resolvePeriod() (billing month/period end/roll-up
- *                                          boundaries) out of buildStatementData so it can be shared with the
- *                                          new buildStatementHeader() - a lighter entry point that runs only
- *                                          the header query, for gts_pdf_lib.js's statement PDF header section
- *                                          (AR activity/invoice-line/aging queries aren't needed until the rest
- *                                          of the statement is scoped). Also added an entity_reg_no slot to
- *                                          getEntityFields' return value - left blank for now, no source field
- *                                          is wired up yet (see the field's own comment)
+ * 03-September-2026    Jared Espineli      Initial Release - ported the query/lookup engine (buildStatementData
+ *                                          and its helpers) and extracted resolvePeriod() so it's shared with
+ *                                          the lighter buildStatementHeader() entry point.
+ * 04-September-2026    Jared Espineli      Fixed getBillingAddress/getEntityFields erroring for every customer
+ *                                          ("defaultaddress"/"federalidnumber" aren't valid search.lookupFields
+ *                                          columns on Customer/Subsidiary) by switching both to the SuiteQL
+ *                                          fallback already in place for exactly this kind of gap.
  *
  * Copyright (c) 2026 BlueBridge One Business Solutions, All Rights Reserved
  * support@bluebridgeone.com, UK Support: +44 (0)1932 300007 SA Support: +27 (0)10 500 8674
@@ -47,26 +39,22 @@ define(['N/query', 'N/search', 'N/error', 'N/log'],
         //Never hardcode inline - all account values live here
         //-----------------------------------------------
 
-        // Quorum invoices in advance: a statement dated in May bills June, and
-        // those charges carry a June transaction date. So the statement period
-        // runs to the end of the billing month, while ageing is still measured
-        // as at the statement date - which is what puts advance charges in
-        // Current rather than overdue. Set to 0 for arrears billing.
+        // Quorum invoices in advance: a statement dated in May bills June, with charges carrying a June
+        // transaction date. The period runs to the end of the billing month while ageing is still measured at
+        // the statement date; set to 0 for arrears billing.
         const ADVANCE_MONTHS = 1;
 
         const AR_ACCOUNT_TYPE = 'AcctRec';
         const SQL_DATE_MASK = 'YYYY-MM-DD';
         const AR_TRAN_TYPES = "'CustInvc','CustCred','CustPymt','CustDep','CustRfnd'";
 
-        // Charges folded into Balance B/f when roll-up is enabled. Payments,
-        // deposits and refunds follow the separate rule below.
+        // Charges folded into Balance B/f when roll-up is enabled. Payments, deposits and refunds follow the
+        // separate rule below.
         const ROLLUP_TYPES = "'CustInvc','CustCred'";
 
-        // How far back payments stay itemised, in months before the statement
-        // date. Only receipts since the previous statement are itemised, so a
-        // statement dated 20/05 lists the 30/04 receipt and folds anything
-        // older into Balance B/f. Charges use the billing month boundary
-        // instead (see ADVANCE_MONTHS above).
+        // How far back payments stay itemised, in months before the statement date - only receipts since the
+        // previous statement are itemised, older ones fold into Balance B/f. Charges use the billing month
+        // boundary instead (see ADVANCE_MONTHS).
         const PAYMENT_MONTHS = 1;
 
         const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June',
@@ -78,16 +66,13 @@ define(['N/query', 'N/search', 'N/error', 'N/log'],
         //General helpers
         //-----------------------------------------------
 
-        // Runs a SuiteQL statement and returns its rows. Values reaching this
-        // helper have already been validated by assertId/sqlDate before being
-        // concatenated in, so no raw input is ever passed through unchecked.
+        // Runs a SuiteQL statement and returns its rows. Values reaching this helper have already been
+        // validated by assertId/sqlDate, so no raw input is ever passed through unchecked.
         const runQuery = (sql, label) => {
             try {
                 return query.runSuiteQL({query: sql}).asMappedResults();
             } catch (e) {
-                // SuiteQL sets e.message to a generic string on failure, so the
-                // full statement is logged to allow it to be replayed directly
-                // in the query browser.
+                // SuiteQL sets e.message to a generic string on failure, so the full statement is logged too.
                 log.error(`SuiteQL failed - ${label}`, e);
                 log.error(`SuiteQL text - ${label}`, sql);
                 throw error.create({
@@ -119,9 +104,8 @@ define(['N/query', 'N/search', 'N/error', 'N/log'],
             return String(value);
         }
 
-        // Converts a form date into the YYYY-MM-DD mask the queries use.
-        // Handles DD/MM/YYYY and D/M/YYYY; anything already in the target
-        // format is passed through untouched.
+        // Converts a form date into the YYYY-MM-DD mask the queries use. Handles DD/MM/YYYY and D/M/YYYY;
+        // anything already in the target format is passed through untouched.
         const normaliseDate = (value) => {
             if (!value) return value;
 
@@ -168,9 +152,8 @@ define(['N/query', 'N/search', 'N/error', 'N/log'],
             return `${yearMonth}-${lastDay < 10 ? '0' + lastDay : lastDay}`;
         }
 
-        // Shifts a full YYYY-MM-DD date by whole months. The day is clamped to
-        // the target month's length, so 31 March less one month gives 28 or 29
-        // February rather than rolling into March.
+        // Shifts a full YYYY-MM-DD date by whole months. The day is clamped to the target month's length, so 31
+        // March less one month gives 28 or 29 February rather than rolling into March.
         const addMonthsToDate = (date, months) => {
             let day = parseInt(String(date).substring(8, 10), 10);
             const yearMonth = addMonths(String(date).substring(0, 7), months);
@@ -196,16 +179,14 @@ define(['N/query', 'N/search', 'N/error', 'N/log'],
         }
 
         //-----------------------------------------------
-        //Statement header
-        //Entity, VAT numbers, property/unit and the
-        //pre-formatted bank block all sit on the most
-        //recent invoice in the period
+        //Statement header - Entity, VAT numbers, property/
+        //unit and the pre-formatted bank block all sit on
+        //the most recent invoice in the period
         //-----------------------------------------------
         const getStatementHeader = (customerId, startDate, periodEnd) => {
 
-            // Transaction table only. Joins to customer and subsidiary were
-            // removed - an INNER JOIN matched no rows and a LEFT JOIN errored
-            // outright, so the entity-level fields are looked up separately.
+            // Transaction table only - joins to customer/subsidiary were removed (an INNER JOIN matched no
+            // rows, a LEFT JOIN errored outright), so entity-level fields are looked up separately.
             const sql =
                 'SELECT ' +
                 '    t.id                                    AS transaction_id, ' +
@@ -233,8 +214,7 @@ define(['N/query', 'N/search', 'N/error', 'N/log'],
 
             log.debug('Header row count', results.length);
 
-            // No invoice in the period still produces a valid statement, just
-            // without the invoice-sourced header detail.
+            // No invoice in the period still produces a valid statement, just without the invoice-sourced detail.
             if (!results.length) {
                 log.debug('No invoice in period for header', `customer ${customerId}`);
                 return {customer_name: '', entity_name: '', currency_symbol: 'R'};
@@ -242,8 +222,7 @@ define(['N/query', 'N/search', 'N/error', 'N/log'],
 
             const headerRow = results[0];
 
-            // Customer-level and subsidiary-level fields, fetched by lookup so
-            // no join is needed and a missing field cannot break the statement.
+            // Customer/subsidiary fields, fetched by lookup so no join is needed and a missing field can't break the statement.
             const entityFields = getEntityFields(customerId, headerRow.subsidiary_id);
             headerRow.recipient_vat_no = entityFields.recipient_vat_no;
             headerRow.recipient_reg_no = entityFields.recipient_reg_no;
@@ -258,18 +237,17 @@ define(['N/query', 'N/search', 'N/error', 'N/log'],
         }
 
         //-----------------------------------------------
-        //Bill-to address
-        //Taken from the customer record rather than the
-        //invoice, so a tenant who has moved gets their
-        //current address. Queried on its own so a failure
+        //Bill-to address - taken from the customer record,
+        //not the invoice, so a moved tenant gets their
+        //current address; queried on its own so a failure
         //here cannot take the whole statement down
         //-----------------------------------------------
         const getBillingAddress = (customerId) => {
 
             if (!customerId) return '';
 
-            // Preferred: the address flagged as default billing on the customer.
-            // addrtext is the formatted block as NetSuite renders it.
+            // Preferred: the address flagged as default billing on the customer (addrtext is NetSuite's own
+            // formatted block).
             try {
                 const sql =
                     'SELECT ea.addrtext AS bill_address ' +
@@ -287,26 +265,31 @@ define(['N/query', 'N/search', 'N/error', 'N/log'],
                 log.error(`Billing address query failed for customer ${customerId}`, e.message);
             }
 
-            // Fallback: the customer's default address, whichever that is
+            // Fallback: no address flagged default billing - use whichever address book entry comes first.
+            // 'defaultaddress' isn't a valid search.lookupFields column on Customer, so this stays SuiteQL too.
             try {
-                const fields = search.lookupFields({
-                    type: search.Type.CUSTOMER,
-                    id: customerId,
-                    columns: ['defaultaddress']
-                });
+                const sql =
+                    'SELECT ea.addrtext AS bill_address ' +
+                    'FROM customerAddressbook cab ' +
+                    'JOIN customerAddressbookEntityAddress ea ' +
+                    '       ON ea.nkey = cab.addressbookaddress ' +
+                    `WHERE cab.entity = ${assertId(customerId)} ` +
+                    'FETCH FIRST 1 ROWS ONLY';
 
-                return fields.defaultaddress || '';
+                const rows = query.runSuiteQL({query: sql}).asMappedResults();
+
+                return (rows.length && rows[0].bill_address) || '';
 
             } catch (e) {
-                log.error(`Default address lookup failed for customer ${customerId}`, e.message);
+                log.error(`Fallback address query failed for customer ${customerId}`, e.message);
                 return '';
             }
         }
 
         //-----------------------------------------------
-        //Customer and subsidiary fields
-        //Each lookup is isolated so one unavailable field
-        //degrades that value only, never the statement
+        //Customer and subsidiary fields - each lookup is
+        //isolated so one unavailable field degrades that
+        //value only, never the statement
         //-----------------------------------------------
         const getEntityFields = (customerId, subsidiaryFromInvoice) => {
 
@@ -316,13 +299,8 @@ define(['N/query', 'N/search', 'N/error', 'N/log'],
                 bank_guarantee: '',
                 deposit: '',
                 entity_vat_no: '',
-                // The statement design also shows an "Entity Registration
-                // No." distinct from Entity VAT No. (federalidnumber, above)
-                // and Recipient Registration No. (the customer's own
-                // custentity_alf_company_reg_num, below) - no subsidiary-
-                // level field for this has been confirmed yet, so it stays
-                // blank rather than guessing a field id. Wire it up here
-                // once BB1/the client confirm which field holds it.
+                // Entity Registration No., distinct from Entity VAT No./Recipient Registration No. - no
+                // subsidiary-level field confirmed yet, so left blank until BB1/the client confirm one.
                 entity_reg_no: '',
                 payment_url: ''
             };
@@ -343,8 +321,7 @@ define(['N/query', 'N/search', 'N/error', 'N/log'],
                 values.bank_guarantee = customerFields.custentity_bb1_bank_guarantee || '';
                 values.deposit = customerFields.depositbalance || '';
 
-                // Fallback only - the invoice's own subsidiary is preferred.
-                // Select fields come back as an array of {value, text}
+                // Fallback only - the invoice's own subsidiary is preferred. Select fields come back as {value, text}.
                 if (!subsidiaryId && customerFields.subsidiary && customerFields.subsidiary.length) {
                     subsidiaryId = customerFields.subsidiary[0].value;
                 }
@@ -358,38 +335,19 @@ define(['N/query', 'N/search', 'N/error', 'N/log'],
                     `Entity VAT No and the payment link cannot be fetched for customer ${customerId}`);
             }
 
-            // Subsidiary record - source of the VAT number and payment URL
+            // Subsidiary record - source of the VAT number and payment URL. 'federalidnumber' isn't a valid
+            // search.lookupFields column on Subsidiary, so this goes straight through SuiteQL instead (no
+            // joins - a join from transaction to subsidiary fails on this account).
             if (subsidiaryId) {
-                try {
-                    const subsidiaryFields = search.lookupFields({
-                        type: search.Type.SUBSIDIARY,
-                        id: subsidiaryId,
-                        columns: ['federalidnumber', 'custrecord_bb1_peach_payment_url']
-                    });
-
-                    values.entity_vat_no = subsidiaryFields.federalidnumber || '';
-                    values.payment_url = subsidiaryFields.custrecord_bb1_peach_payment_url || '';
-
-                } catch (e) {
-                    log.error(`Subsidiary lookup failed for ${subsidiaryId}`, e.message);
-                }
-
-                // lookupFields does not return every custom field type on every
-                // account, so anything still missing is retried through SuiteQL
-                // against the subsidiary table directly. No joins - a join from
-                // transaction to subsidiary fails on this account.
-                if (!values.payment_url || !values.entity_vat_no) {
-                    values = fillFromSubsidiaryQuery(subsidiaryId, values);
-                }
+                values = fillFromSubsidiaryQuery(subsidiaryId, values);
             }
 
             return values;
         }
 
         //-----------------------------------------------
-        //Subsidiary fallback
-        //Second attempt at the subsidiary-level values,
-        //queried directly rather than looked up
+        //Subsidiary fallback - second attempt at the
+        //subsidiary-level values, queried directly
         //-----------------------------------------------
         const fillFromSubsidiaryQuery = (subsidiaryId, values) => {
 
@@ -417,9 +375,8 @@ define(['N/query', 'N/search', 'N/error', 'N/log'],
         }
 
         //-----------------------------------------------
-        //Statement body
-        //Balance brought forward plus all AR activity in
-        //the period, with a running balance
+        //Statement body - Balance brought forward plus all
+        //AR activity in the period, with a running balance
         //-----------------------------------------------
         const getStatementRows = (customerId, startDate, periodEnd, statementDate, billingStart, paymentStart) => {
 
@@ -427,17 +384,15 @@ define(['N/query', 'N/search', 'N/error', 'N/log'],
             const to = sqlDate(periodEnd);         // includes advance-dated charges
             const from = sqlDate(startDate);
 
-            // With roll-up on, charges before the billing month move out of the
-            // itemised rows and into Balance B/f. The two filters are exact
-            // complements, so nothing is counted twice or dropped.
+            // With roll-up on, charges before the billing month move out of the itemised rows and into Balance
+            // B/f. The two filters are exact complements, so nothing is counted twice or dropped.
             let activityFilter = '';
             let broughtForward = '';
 
             if (billingStart) {
 
-                // Charges are itemised from the billing month onward; payments
-                // and refunds only since the previous statement. Everything
-                // earlier rolls into Balance B/f.
+                // Charges are itemised from the billing month onward; payments/refunds only since the previous
+                // statement - everything earlier rolls into Balance B/f.
                 const chargeBoundary = sqlDate(billingStart);
                 const paymentBoundary = sqlDate(paymentStart);
 
@@ -525,15 +480,14 @@ define(['N/query', 'N/search', 'N/error', 'N/log'],
         }
 
         //-----------------------------------------------
-        //Invoice item lines
-        //Item lines are stored negative against income, so
-        //every amount is negated for display. Tax comes
-        //from tax1amt - taxamount is removed in SuiteQL
+        //Invoice item lines - stored negative against
+        //income, so every amount is negated for display;
+        //tax comes from tax1amt (taxamount removed in SuiteQL)
         //-----------------------------------------------
         const getInvoiceLines = (customerId, startDate, periodEnd, billingMonth, billingStart) => {
 
-            // Charges belonging to the month being billed drive the Current
-            // Month Charges total; anything earlier in the period is arrears
+            // Charges belonging to the month being billed drive the Current Month Charges total; anything
+            // earlier in the period is arrears
             const yearMonth = billingMonth;
 
             // Invoices folded into Balance B/f must not also be itemised
@@ -573,9 +527,8 @@ define(['N/query', 'N/search', 'N/error', 'N/log'],
         }
 
         //-----------------------------------------------
-        //Aging summary
-        //Current / 30 / 60 / 90 / 120+ buckets - 120+ is
-        //the catch-all for anything over 90 days
+        //Aging summary - Current/30/60/90/120+ buckets;
+        //120+ is the catch-all for anything over 90 days
         //-----------------------------------------------
         const getAgingSummary = (customerId, statementDate, periodEnd) => {
 
@@ -612,15 +565,13 @@ define(['N/query', 'N/search', 'N/error', 'N/log'],
         }
 
         //-----------------------------------------------
-        //Statement period
-        //Shared by both public entry points - the billing
-        //month/period end/roll-up boundaries only depend
-        //on the statement date, not on which parts of the
-        //statement are actually being built
+        //Statement period - shared by both public entry
+        //points since these boundaries only depend on the
+        //statement date
         //-----------------------------------------------
 
-        // Validates and normalises the two date filters every entry point
-        // needs, throwing the same error either would have thrown inline.
+        // Validates and normalises the two date filters every entry point needs, throwing the same error either
+        // would have thrown inline.
         const resolveDates = (f) => {
             const startDate = normaliseDate(f.startDate);
             const statementDate = normaliseDate(f.statementDate);
@@ -635,10 +586,8 @@ define(['N/query', 'N/search', 'N/error', 'N/log'],
             return {startDate, statementDate};
         }
 
-        // Billing month sits ADVANCE_MONTHS after the statement date's own
-        // month, and the period runs to the last day of that month so
-        // advance-dated charges are picked up. Payments on or before
-        // paymentStart are folded into Balance B/f.
+        // Billing month sits ADVANCE_MONTHS after the statement date's own month, running to the last day of
+        // that month so advance-dated charges are picked up. Payments on or before paymentStart fold into Balance B/f.
         const resolvePeriod = (statementDate) => {
             const billingMonth = addMonths(String(statementDate).substring(0, 7), ADVANCE_MONTHS);
 
@@ -651,10 +600,9 @@ define(['N/query', 'N/search', 'N/error', 'N/log'],
         }
 
         //-----------------------------------------------
-        //Public entry point - header only
-        //Runs just the header query - no AR activity/
-        //invoice-line/aging queries - for gts_pdf_lib.js's
-        //statement PDF header section
+        //Public entry point - header only. Runs just the
+        //header query, for gts_pdf_lib.js's statement PDF
+        //header section
         //-----------------------------------------------
 
         /**
@@ -683,11 +631,9 @@ define(['N/query', 'N/search', 'N/error', 'N/log'],
         }
 
         //-----------------------------------------------
-        //Public entry point - full statement
-        //Assembles header + rows + invoice lines + aging
-        //into one statement object, with invoice lines
-        //nested under their parent transaction row and the
-        //Current Month Charges/Arrears totals computed
+        //Public entry point - full statement. Assembles
+        //header + rows + invoice lines + aging into one
+        //statement object
         //-----------------------------------------------
 
         /**
@@ -697,9 +643,9 @@ define(['N/query', 'N/search', 'N/error', 'N/log'],
          * @param {string|number} filters.customerId - customer internal id
          * @param {string} filters.startDate - statement period start date, in the account's display format or YYYY-MM-DD
          * @param {string} filters.statementDate - statement date, same format rules as startDate
-         * @param {boolean} [filters.rollup=true] - when true (the default - matches the form's own default),
-         *   invoices/credit memos before the billing month and payments/deposits/refunds before the previous
-         *   statement are folded into Balance B/f instead of being itemised
+         * @param {boolean} [filters.rollup=true] - when true (the default), invoices/credit memos before the
+         *   billing month and payments/deposits/refunds before the previous statement are folded into
+         *   Balance B/f instead of being itemised
          * @returns {Object} statement - {header, rows, lines, aging, totals, startDate, statementDate, billingMonth, periodEnd}
          */
         LIB_FX.buildStatementData = (filters) => {
@@ -725,8 +671,8 @@ define(['N/query', 'N/search', 'N/error', 'N/log'],
             statement.billingMonth = monthLabel(billingMonth);
             statement.periodEnd = periodEnd;
 
-            // Nest the invoice item lines under the transaction they belong to.
-            // Built as a plain object rather than an Array so it can be enumerated.
+            // Nest the invoice item lines under the transaction they belong to, as a plain object (not an
+            // Array) so it can be enumerated.
             const linesByTransaction = {};
             for (let i = 0; i < statement.lines.length; i++) {
                 const line = statement.lines[i];
@@ -741,8 +687,8 @@ define(['N/query', 'N/search', 'N/error', 'N/log'],
                 row.lines = linesByTransaction[row.transaction_id] || [];
             }
 
-            // Current month charges - restricted to the statement month, so a
-            // statement spanning several months still shows this month's billing
+            // Current month charges - restricted to the statement month, so a statement spanning several
+            // months still shows this month's billing
             let totalExclusive = 0;
             let totalTax = 0;
 
@@ -759,8 +705,8 @@ define(['N/query', 'N/search', 'N/error', 'N/log'],
                 exclusive: totalExclusive,
                 tax: totalTax,
                 inclusive: currentInclusive,
-                // Anything still owing from earlier periods. Negative means the
-                // tenant is in credit, which prints as Prepaid on the statement.
+                // Anything still owing from earlier periods. Negative means the tenant is in credit, which
+                // prints as Prepaid on the statement.
                 arrears: toNumber(statement.aging.total_due) - currentInclusive
             };
 

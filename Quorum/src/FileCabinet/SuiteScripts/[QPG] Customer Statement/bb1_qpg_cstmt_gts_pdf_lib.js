@@ -5,88 +5,23 @@
  *
  * Server-only library that renders the Generate Statement Suitelet's PDF -
  * one merged PDF covering every customer marked in the Customer List, each
- * as its own page (separated by a page break), opened in a single browser
- * tab (see gts_cs.js's generateStatement/gts_lib_helper.js's buildPrintUrl).
- * Builds the full statement now - header (logo, Entity/Property panel,
- * customer block), the statement date/from/for-the-month line, the AR
- * activity table, the totals block (with bank details standing in for the
- * reference design's online-payment prompt), and a Queries/aging-days
- * strip - matching "Tenant Statements - Commercial.pdf" up to the aging
- * strip; everything the reference design shows after that (the itemised
- * bank details table, "Printed:"/software footer) is intentionally
- * dropped in favour of a plain page number, per spec.
+ * as its own page (separated by a page break). Builds the header (logo,
+ * Entity/Property panel, customer block), the statement date/from/for-the-
+ * month line, the AR activity table, the totals block, and a Queries/
+ * aging-days strip - matching "Tenant Statements - Commercial.pdf" up to
+ * the aging strip; everything after that is dropped in favour of a plain
+ * page number, per spec.
  *
  * Date                 Author              Purpose
  * 03-September-2026    Jared Espineli      Initial Release - header section (logo, Entity/Property panel,
- *                                          customer block) for every marked customer, merged into one PDF
- * 03-September-2026    Jared Espineli      Fixed two rendering bugs seen on the actual PDF output: (1) the logo
- *                                          was badly stretched - the ported POC comment claimed a 0.53:1
- *                                          portrait ratio, but the real file (checked directly) is a 2.78:1
- *                                          landscape wordmark; resized to LOGO_WIDTH_PT/LOGO_HEIGHT_PT matching
- *                                          its real ratio. (2) "Recipient Registration No." (and other wrapped
- *                                          labels/values) rendered with stretched-out letter spacing - BFO
- *                                          justifies wrapped <td> text by default; panelCell() now wraps label/
- *                                          value text in a left-aligned <p> (leftAligned()) to override that,
- *                                          same fix already used by the Tenancy Schedule report's column
- *                                          headers. Also widened the panel's label column (27% -> 30%) and
- *                                          added vertical-align/line-height so a wrapped two-line label doesn't
- *                                          sit oddly against a single-line value beside it
- * 04-September-2026    Jared Espineli      Rebuilt the Entity/Property panel around a stacked label-above-value
- *                                          layout (stackedCell() replaces panelCell()) - splitting each row into
- *                                          narrow side-by-side label/value sub-columns left "Recipient
- *                                          Registration No." (and "Entity Registration No.") only ~30% of the
- *                                          panel width to wrap in, and the wrapped second line rendered
- *                                          overlapping the FOLLOWING row instead of pushing it down - a BFO row-
- *                                          height quirk with uneven-height sibling cells on the same row. Giving
- *                                          each label its own full (or half, for two-up rows) width column
- *                                          removes the wrap almost entirely and matches "Tenant Statements -
- *                                          Commercial.pdf"'s actual layout more closely besides. Also enlarged
- *                                          the logo (110x40pt -> 180x65pt, same 2.78:1 ratio) per feedback that
- *                                          it should occupy more of the header
- * 04-September-2026    Jared Espineli      Fixed the rebuilt panel's label/value rendering fully on top of each
- *                                          other within the same cell - stackedCell() had stacked them as two
- *                                          separate <p> elements (with margin/line-height resets to control the
- *                                          gap between them), which BFO collapsed onto the same vertical
- *                                          position instead of stacking. Replaced with the proven-safe pattern
- *                                          already used for the multi-line billing address elsewhere in this
- *                                          same document: one <p>, two <span>s joined by a literal <br/>
- * 04-September-2026    Jared Espineli      Reworked the panel back to a plain 4-column label/value grid per
- *                                          feedback (panelCell() replaces stackedCell()) - no borders, background
- *                                          colour only, colspan-merging a row's cells down to a single label +
- *                                          full-width value when there's only one pair (Entity, Entity VAT No.,
- *                                          Entity Reg. No.). "Entity/Recipient Registration No." shortened to
- *                                          "... Reg. No." so each fits the 30%-wide label column on one line -
- *                                          the earlier row-overlap bug was specifically a wrapped label bleeding
- *                                          into the row below, so this avoids the wrap outright
- * 04-September-2026    Jared Espineli      Added the rest of the statement: buildMetaLine() (Statement Date/
- *                                          From (the Start Date, replacing the reference design's Tax Invoice
- *                                          No.)/For the Month), buildActivityTable() (the AR activity rows,
- *                                          sourced from dataLib.buildStatementData - see its own row-shape
- *                                          comments for the Balance B/f and item-line rules ported from the POC),
- *                                          buildTotalsSection() (Arrears/Current Month Charges/Amount Due,
- *                                          matching the reference design, with the header's bank_details text in
- *                                          place of the design's online-payment prompt on the left), and
- *                                          buildQueriesAgingSection() (Queries email/WhatsApp left, the 120+/90/
- *                                          60/30/Current aging strip right - QUERIES_EMAIL/QUERIES_WHATSAPP
- *                                          ported verbatim from the POC's own constants). Everything the
- *                                          reference design shows after the aging strip is dropped per spec, in
- *                                          favour of a plain page-number footer (cstmtfooter macro). Switched
- *                                          buildCustomerPage from dataLib.buildStatementHeader to the full
- *                                          buildStatementData now that rows/lines/aging/totals are all needed
- * 04-September-2026    Jared Espineli      Restyled the activity table and totals box to match a cleaner
- *                                          reference screenshot: activity table's grey header fill and per-row
- *                                          border lines replaced with a plain header (one solid rule underneath)
- *                                          and alternating row shading (cstmt-row-alt) instead - flattenActivityRows()
- *                                          now flattens statement.rows/.lines into one plain list up front so the
- *                                          stripe index runs continuously and doesn't reset at an invoice's own
- *                                          item lines. Totals box now explicitly sizes its own Exclusive/Tax/
- *                                          Inclusive columns off the SAME COL_DATE/COL_ALLOCATION/COL_REMARKS/
- *                                          COL_NUM constants the activity table uses (re-based to the box's own
- *                                          width), so they land exactly under their counterparts above instead
- *                                          of just approximating the split with separate hardcoded percentages;
- *                                          also boxed the totals table in a thin border and added a rule above
- *                                          Amount Due, and the bank-details text on the left is now plain (no
- *                                          grey panel background), matching the screenshot
+ *                                          customer block); fixed the logo's aspect ratio and wrapped-label
+ *                                          letter-spacing rendering bugs.
+ * 04-September-2026    Jared Espineli      Iterated the Entity/Property panel layout (stacked, then back to a
+ *                                          plain 4-column grid) to fix rendering bugs, added the rest of the
+ *                                          statement (meta line, activity table, totals, queries/aging),
+ *                                          restyled the activity table/totals to match the reference design, and
+ *                                          split buildPdf into buildCustomerPageXml/wrapPagesAsPdf so gts_mr.js
+ *                                          could generate pages per customer in the background.
  *
  * Copyright (c) 2026 BlueBridge One Business Solutions, All Rights Reserved
  * support@bluebridgeone.com, UK Support: +44 (0)1932 300007 SA Support: +27 (0)10 500 8674
@@ -105,29 +40,18 @@ define(['N/render', 'N/log', './bb1_qpg_cstmt_gts_data_lib', './bb1_qpg_cstmt_gt
 
         const _FIELDS = helperLib._FIELDS;
 
-        // File cabinet URL of the Quorum logo - the tall, stacked house-icon
-        // + "PROPERTIES" wordmark used on the tenant statement (not the
-        // wide wordmark logo the Tenancy Schedule report uses - see its own
-        // bb1_qpg_tschd_report_pdf_lib.js). Ported from the standalone POC
-        // Suitelet (bb1_qpg_stmt_tenant_su_poc.js, v23-2026-08-30). Escape
-        // any & in this URL as &amp; if it's ever changed.
+        // File Cabinet URL of the Quorum logo used on the tenant statement (not the Tenancy Schedule report's
+        // wordmark logo). Escape any & in this URL as &amp; if it's ever changed.
         const LOGO_URL = 'https://11536405.app.netsuite.com/core/media/media.nl' +
             '?id=5936&amp;c=11536405' +
             '&amp;h=ShdVNtHtCNZxRziqz5XaCmH8XthcQqu1MScOaMoTvGlWj9lm';
 
-        // Logo size in points (1pt = 1/72 inch). BFO ignores CSS pixel
-        // widths and falls back to the image's native size unless BOTH
-        // dimensions are given, so width and height are always emitted
-        // together. The POC's own comment claimed this asset was "taller
-        // than wide - roughly 0.53:1", which badly stretched it here - the
-        // actual file (checked directly) is 2889x1040px, a WIDE landscape
-        // wordmark, ratio ~2.78:1. Keep that ratio if this is ever resized.
+        // Logo size in points - BFO ignores CSS pixel widths and falls back to native size unless both
+        // dimensions are given. Actual asset ratio is ~2.78:1 landscape; keep that ratio if resized.
         const LOGO_WIDTH_PT = 180;
         const LOGO_HEIGHT_PT = 65;
 
-        // Queries panel shown bottom-left of the statement, next to the
-        // aging strip. Ported verbatim from the POC's own constants
-        // (bb1_qpg_stmt_tenant_su_poc.js).
+        // Queries panel shown bottom-left of the statement, next to the aging strip.
         const QUERIES_EMAIL = 'commercial@qholdings.co.za';
         const QUERIES_WHATSAPP = '082 400 3693';
 
@@ -137,9 +61,8 @@ define(['N/render', 'N/log', './bb1_qpg_cstmt_gts_data_lib', './bb1_qpg_cstmt_gt
         //Formatting helpers
         //-----------------------------------------------
 
-        // Escape record data before it reaches the BFO document - BFO parses
-        // strict XML, so an unescaped ampersand/quote in an address or memo
-        // would fail the whole render.
+        // Escape record data before it reaches the BFO document - BFO parses strict XML, so an unescaped
+        // ampersand/quote in an address or memo would fail the whole render.
         const escapeXml = (value) => {
             if (value === null || value === undefined) return '';
             return String(value)
@@ -158,23 +81,13 @@ define(['N/render', 'N/log', './bb1_qpg_cstmt_gts_data_lib', './bb1_qpg_cstmt_gt
         }
 
         //-----------------------------------------------
-        //Header section
-        //Logo + title + customer/tenant block on the
-        //left, the Entity/Property panel on the right -
-        //everything the statement prints above its AR
-        //activity table (not built yet, see file header)
+        //Header section - logo + title + customer block
+        //left, Entity/Property panel right
         //-----------------------------------------------
 
-        // One label/value cell PAIR in the Entity/Property panel's 4-column
-        // grid (label 30% / value 20%, twice per row) - plain, borderless,
-        // background-filled cells; colspan lets a row with only one pair
-        // (Entity, Entity VAT No., Entity Reg. No.) merge its value across
-        // the remaining 3 columns instead of leaving them blank, while
-        // still lining up under the two-up rows below/above it. Content is
-        // still wrapped in its own left-aligned <p> - BFO justifies
-        // (stretches) wrapped <td> text by default, and an occasional long
-        // VALUE (e.g. a long entity/property name) can still wrap even
-        // though labels are sized not to (see buildEntityPanel).
+        // One label/value cell pair in the Entity/Property panel's 4-column grid - colspan merges a row with
+        // only one pair across the remaining columns. Content is wrapped in a left-aligned <p> since BFO
+        // justifies wrapped <td> text by default.
         const panelCell = (label, value, colspan) => {
             const span = colspan ? ` colspan="${colspan}"` : '';
             const valueWidth = colspan ? '' : ' style="width: 20%;"';
@@ -182,16 +95,9 @@ define(['N/render', 'N/log', './bb1_qpg_cstmt_gts_data_lib', './bb1_qpg_cstmt_gt
                 `<td class="cstmt-value"${span}${valueWidth}><p style="text-align: left; margin: 0;">${escapeXml(value)}</p></td>`;
         }
 
-        // Three full-width rows (Entity, Entity VAT No., Entity Reg. No.)
-        // then three two-up rows (Property | Unit No., Recipient VAT No. |
-        // Recipient Reg. No., Deposit | Bank Guarantee), matching "Tenant
-        // Statements - Commercial.pdf"'s layout. "Entity Registration No."/
-        // "Recipient Registration No." are shortened to "... Reg. No." -
-        // at this panel's width (45% of an A4 page), the label column (30%
-        // of that, ~70pt) is too narrow for either phrase in full to fit on
-        // one line, and a wrapped label previously overlapped the row below
-        // it (a BFO row-height quirk) - shortening avoids the wrap outright
-        // rather than fighting that quirk again.
+        // Three full-width rows then three two-up rows, matching the reference design's layout. Registration
+        // No. labels are shortened to fit the narrow label column on one line, avoiding a BFO wrap/row-overlap
+        // quirk.
         const buildEntityPanel = (header) => `
             <table class="cstmt-panel">
                 <tr>${panelCell('Entity', header.entity_name, 3)}</tr>
@@ -228,9 +134,8 @@ define(['N/render', 'N/log', './bb1_qpg_cstmt_gts_data_lib', './bb1_qpg_cstmt_gt
         }
 
         //-----------------------------------------------
-        //Statement date/from/for-the-month line
-        //Replaces the reference design's "Tax Invoice
-        //No." with "From" (the Start Date), per spec
+        //Statement date/from/for-the-month line - replaces
+        //"Tax Invoice No." with "From" (the Start Date)
         //-----------------------------------------------
         const buildMetaLine = (statement) => `
             <p class="cstmt-meta">
@@ -241,61 +146,35 @@ define(['N/render', 'N/log', './bb1_qpg_cstmt_gts_data_lib', './bb1_qpg_cstmt_gt
         `;
 
         //-----------------------------------------------
-        //AR activity table
-        //Row/column shape ported from the POC's own
-        //buildStatementXml, adapted to the reference
-        //design's 6-column header (no Document column)
+        //AR activity table - row/column shape adapted from
+        //the POC, matching the reference design's 6-column
+        //header (no Document column)
         //-----------------------------------------------
 
-        // Activity table's own column widths - shared with buildTotalsSection
-        // below so its Exclusive/Tax/Inclusive columns line up exactly under
-        // these ones, per the reference screenshot ("align the totals ...
-        // right below it").
+        // Activity table's own column widths - shared with buildTotalsSection below so its Exclusive/Tax/
+        // Inclusive columns line up exactly under these ones.
         const COL_DATE = 12;
         const COL_ALLOCATION = 18;
         const COL_REMARKS = 40;
         const COL_NUM = 10; // Exclusive / Tax / Inclusive, each
 
-        // Left-aligned text cells go through their own <p> - same fix used
-        // throughout this file for BFO's default wrapped-<td> justification
-        // (Remarks, in particular, regularly wraps to 2-3 lines). Numeric
-        // cells are never long enough to wrap, so they skip the <p> and
-        // rely on the .num class's text-align: right directly.
+        // Left-aligned text cells go through their own <p> to avoid BFO's default wrapped-<td> justification.
+        // Numeric cells never wrap, so they rely on the .num class's text-align: right directly.
         const textCell = (value) => `<td><p style="text-align: left; margin: 0;">${escapeXml(value)}</p></td>`;
         const numCell = (value) => `<td class="num">${value}</td>`;
 
-        // One rendered row - rowIndex drives the zebra striping (every other
-        // row gets a light grey fill instead of a border line between rows,
-        // matching the reference screenshot) and continues seamlessly
-        // across a boundary between two different statement.rows entries -
-        // see buildActivityRows, which flattens everything into one list
-        // before this is ever called, so the stripe never resets mid-invoice.
+        // One rendered row - rowIndex drives zebra striping and continues seamlessly across statement.rows
+        // boundaries. See flattenActivityRows, which flattens everything into one list first so the stripe
+        // never resets mid-invoice.
         const activityRow = (entry, rowIndex) => {
             const rowClass = rowIndex % 2 === 1 ? ' class="cstmt-row-alt"' : '';
             return `<tr${rowClass}>${textCell(entry.date)}${textCell(entry.allocation)}${textCell(entry.remarks)}` +
                 `${numCell(entry.exclusive)}${numCell(entry.tax)}${numCell(entry.inclusive)}</tr>`;
         }
 
-        // Flattens statement.rows (+ nested .lines) into one list of plain
-        // {date, allocation, remarks, exclusive, tax, inclusive} row
-        // entries, in display order - kept separate from activityRow so the
-        // zebra stripe above can run off one continuous index regardless of
-        // which statement.rows entry (or invoice's item lines) a given
-        // rendered row actually came from.
-        //
-        // MRI (and the POC ported from it) suppresses an invoice's own
-        // transaction-level row and prints its item lines in its place -
-        // only a row with no item lines (Balance B/f, a receipt, a credit
-        // memo with no lines, etc.) shows at transaction level.
-        //
-        // Document number isn't its own column here (the reference design
-        // has none), so a header-less row's document number is shown in
-        // Remarks instead - Balance B/f has neither a document number nor a
-        // real date/tax breakdown (it's a synthetic aggregate, not a real
-        // transaction), so those stay blank; every other header-less row
-        // shows its real date and 0.00 in Exclusive/Tax - matches the
-        // reference design exactly (its Receipt row shows "0.00  0.00",
-        // Balance B/f shows blank in both).
+        // Flattens statement.rows (+ nested .lines) into one plain list of row entries, in display order. An
+        // invoice's own transaction-level row is suppressed in favour of its item lines; Balance B/f has no
+        // document number or date/tax breakdown since it's a synthetic aggregate.
         const flattenActivityRows = (rows) => {
             const flat = [];
 
@@ -346,21 +225,14 @@ define(['N/render', 'N/log', './bb1_qpg_cstmt_gts_data_lib', './bb1_qpg_cstmt_gt
         `;
 
         //-----------------------------------------------
-        //Totals block
-        //Matches the reference screenshot's Arrears/
-        //Current Month Charges/Amount Due box, its own
-        //Exclusive/Tax/Inclusive columns sized to line up
-        //under the activity table's (see COL_* above) -
-        //the design's online-payment prompt (left) is
-        //replaced with the transaction's own bank
-        //details, per spec
+        //Totals block matching the reference screenshot's
+        //Arrears/Current Month Charges/Amount Due box - its
+        //own columns line up under the activity table's
+        //(see COL_* above)
         //-----------------------------------------------
         const buildTotalsSection = (statement, symbol) => {
-            // The totals box occupies Remarks + the 3 numeric columns
-            // (COL_REMARKS + 3 * COL_NUM = 70% of the page); its own label
-            // column is Remarks' share of THAT box, and each numeric column
-            // is one COL_NUM's share of it - same 4:1:1:1 ratio as the
-            // activity table, just re-based to the box's own 100%.
+            // The totals box occupies Remarks + the 3 numeric columns (70% of the page). Its label/numeric
+            // column shares reuse the same 4:1:1:1 ratio as the activity table, re-based to the box's own 100%.
             const boxWidth = COL_REMARKS + (3 * COL_NUM);
             const labelWidthPct = (COL_REMARKS / boxWidth * 100).toFixed(2);
             const numWidthPct = (COL_NUM / boxWidth * 100).toFixed(2);
@@ -401,11 +273,9 @@ define(['N/render', 'N/log', './bb1_qpg_cstmt_gts_data_lib', './bb1_qpg_cstmt_gt
         }
 
         //-----------------------------------------------
-        //Queries + aging strip
-        //Last section shown - everything the reference
-        //design prints after this (itemised bank details
-        //table, "Printed:"/software footer) is dropped in
-        //favour of a plain page-number footer (see buildPdf)
+        //Queries + aging strip - last section shown;
+        //everything the reference design prints after this
+        //is dropped in favour of a plain page-number footer
         //-----------------------------------------------
         const buildQueriesAgingSection = (statement) => `
             <table class="cstmt-plain" style="width: 100%; margin-top: 8pt;">
@@ -441,10 +311,9 @@ define(['N/render', 'N/log', './bb1_qpg_cstmt_gts_data_lib', './bb1_qpg_cstmt_gt
             </table>
         `;
 
-        // One marked customer's page. A bad id/no invoice in period/query
-        // failure for one customer must not take the whole merged PDF down
-        // - it prints its own short error page instead of the rest.
-        const buildCustomerPage = (customerId, filters) => {
+        // One marked customer's page - a bad id/query failure prints a short error page instead of taking the
+        // whole merged PDF down. Exported so gts_mr.js's map stage can build one customer's page per map key.
+        LIB_FX.buildCustomerPageXml = (customerId, filters) => {
             try {
                 const statement = dataLib.LIB_FX.buildStatementData(Object.assign({}, filters, {customerId}));
                 const symbol = statement.header.currency_symbol || 'R';
@@ -464,18 +333,9 @@ define(['N/render', 'N/log', './bb1_qpg_cstmt_gts_data_lib', './bb1_qpg_cstmt_gt
         //PDF assembly
         //-----------------------------------------------
 
-        // Builds the merged PDF - one page per marked customer id, in the
-        // order they were marked, separated by a page break.
-        LIB_FX.buildPdf = (params) => {
-            const customerIds = helperLib.LIB_FX.parseIdListParam(params && params[_FIELDS.ACTION.CUSTOMER_IDS]);
-
-            const filters = {
-                startDate: params && params[_FIELDS.FORM.START_DATE],
-                statementDate: params && params[_FIELDS.FORM.STATEMENT_DATE],
-                rollup: !(params && params[_FIELDS.FORM.ROLL_PRIOR_CHARGES] === 'F')
-            };
-
-            const pages = customerIds.map((customerId) => buildCustomerPage(customerId, filters));
+        // Merges already-built customer pages into one PDF, separated by a page break, in the order given.
+        // Extracted out of buildPdf so gts_mr.js's summarize stage can do this same final merge on its own.
+        LIB_FX.wrapPagesAsPdf = (pages) => {
             const body = pages.join('<pbr/>');
 
             const xml = `
@@ -527,6 +387,21 @@ define(['N/render', 'N/log', './bb1_qpg_cstmt_gts_data_lib', './bb1_qpg_cstmt_gt
 
             // xml.trim() strips the leading newline/indentation so <?xml ?> is the first character
             return render.xmlToPdf({xmlString: xml.trim()});
+        }
+
+        // Builds the merged PDF straight from request params - one page per marked customer, in marked order.
+        // No longer called from gts_sl.js; kept as a convenience wrapper around buildCustomerPageXml/wrapPagesAsPdf.
+        LIB_FX.buildPdf = (params) => {
+            const customerIds = helperLib.LIB_FX.parseIdListParam(params && params[_FIELDS.ACTION.CUSTOMER_IDS]);
+
+            const filters = {
+                startDate: params && params[_FIELDS.FORM.START_DATE],
+                statementDate: params && params[_FIELDS.FORM.STATEMENT_DATE],
+                rollup: !(params && params[_FIELDS.FORM.ROLL_PRIOR_CHARGES] === 'F')
+            };
+
+            const pages = customerIds.map((customerId) => LIB_FX.buildCustomerPageXml(customerId, filters));
+            return LIB_FX.wrapPagesAsPdf(pages);
         }
 
         return {LIB_FX};
