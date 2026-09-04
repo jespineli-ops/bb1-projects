@@ -218,20 +218,20 @@
                     <#if item_index==0>
                         <thead>
                             <tr>
-                                <th style="width: 46%;" colspan="12">${item.item@label}</th>
-                                <th style="width: 14%;" colspan="2" align="center">Count</th>
-                                <th style="width: 15%;" colspan="4" align="center">${item.rate@label}</th>
+                                <th style="width: 38%;" colspan="12">${item.item@label}</th>
+                                <th style="width: 10%;" colspan="2" align="center">Count</th>
+                                <th style="width: 18%;" colspan="4" align="center">${item.rate@label}</th>
                                 <th style="width: 16%;" colspan="2" align="center">Tax Amount</th>
-                                <th style="width: 15%;" colspan="4" align="center">${item.amount@label}</th>
+                                <th style="width: 18%;" colspan="4" align="center">${item.amount@label}</th>
                             </tr>
                         </thead>
                     </#if>
                     <tr>
-                        <td style="width: 46%;" colspan="12"><span class="itemname">${item.item}</span><br />${item.description}</td>
-                        <td style="width: 14%;" colspan="2" align="center">${item.quantity}</td>
-                        <td style="width: 15%;" colspan="4" align="center">${item.rate?replace("¤", record.currency + " ")}</td>
+                        <td style="width: 38%;" colspan="12"><span class="itemname">${item.item}</span><br />${item.description}</td>
+                        <td style="width: 10%;" colspan="2" align="center">${item.quantity}</td>
+                        <td style="width: 18%;" colspan="4" align="center">${item.rate?replace("¤", record.currency + " ")}</td>
                         <td style="width: 16%;" colspan="2" align="center">${item.tax1amt?replace("¤", record.currency + " ")}</td>
-                        <td style="width: 15%;" colspan="4" align="center">${item.amount?replace("¤", record.currency + " ")}</td>
+                        <td style="width: 18%;" colspan="4" align="center">${item.amount?replace("¤", record.currency + " ")}</td>
                     </tr>
                 </#list>
             </table>
