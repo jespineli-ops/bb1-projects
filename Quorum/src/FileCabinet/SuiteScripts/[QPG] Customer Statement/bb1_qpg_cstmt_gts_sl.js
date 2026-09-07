@@ -23,6 +23,9 @@
  *                                          background gts_mr.js Map/Reduce job instead of streaming the PDF
  *                                          inline, and added the STATUS_CHECK/DOWNLOAD_PDF actions for the
  *                                          progress page to poll and then stream+delete the finished PDF.
+ * 07-September-2026    Jared Espineli      Added the EMAIL_STATEMENT action, queuing gts_email_mr.js the same
+ *                                          way PRINT_PDF queues gts_mr.js - reuses STATUS_CHECK to poll, but has
+ *                                          no download step of its own since nothing is streamed back.
  *
  * Copyright (c) 2026 BlueBridge One Business Solutions, All Rights Reserved
  * support@bluebridgeone.com, UK Support: +44 (0)1932 300007 SA Support: +27 (0)10 500 8674
@@ -58,6 +61,14 @@ define(['N/file', 'N/log', './bb1_qpg_cstmt_gts_form_lib', './bb1_qpg_cstmt_gts_
                 // Queues gts_mr.js instead of rendering the PDF here (see gts_task_lib.js).
                 const submission = taskLib.LIB_FX.submitGenerateStatementTask(request.parameters);
                 response.writePage(taskLib.LIB_FX.buildConfirmationForm(submission));
+                return;
+            }
+
+            if (action === _FIELDS.ACTION.EMAIL_STATEMENT) {
+                // Queues gts_email_mr.js - one email per marked customer, each with their own single-page
+                // statement PDF attached (see gts_email_mr.js/gts_email_lib.js).
+                const submission = taskLib.LIB_FX.submitEmailStatementTask(request.parameters);
+                response.writePage(taskLib.LIB_FX.buildEmailConfirmationForm(submission));
                 return;
             }
 

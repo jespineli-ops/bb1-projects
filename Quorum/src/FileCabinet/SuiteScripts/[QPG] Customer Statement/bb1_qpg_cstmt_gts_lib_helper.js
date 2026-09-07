@@ -22,6 +22,11 @@
  *                                          added RUN_ID, a self-generated id passed in as a script parameter
  *                                          instead) and two invalid search.lookupFields columns that were
  *                                          failing for every customer.
+ * 07-September-2026    Jared Espineli      Replaced Previous/Next with a page-range SELECT dropdown (e.g.
+ *                                          "1-15", "16-30") and raised PAGE_SIZE from 2 to 15.
+ * 07-September-2026    Jared Espineli      Added the Email Statement action + EMAIL_MR field ids (mirrors MR,
+ *                                          its own background job - see gts_email_mr.js) and factored
+ *                                          buildPrintUrl/the new buildEmailUrl onto one shared builder.
  *
  * Copyright (c) 2026 BlueBridge One Business Solutions, All Rights Reserved
  * support@bluebridgeone.com, UK Support: +44 (0)1932 300007 SA Support: +27 (0)10 500 8674
@@ -72,8 +77,10 @@ define(['N/url'],
                 // Customer List rows (see gts_form_lib.js's addResultsSublist).
                 SELECT_ALL_BUTTON: 'custpage_qpg_cstmt_gts_res_select_all',
                 CLEAR_ALL_BUTTON:  'custpage_qpg_cstmt_gts_res_clear_all',
-                PREVIOUS_BUTTON:   'custpage_qpg_cstmt_gts_res_previous',
-                NEXT_BUTTON:       'custpage_qpg_cstmt_gts_res_next',
+                // Page-range dropdown ("1-15", "16-30", ...) rendered as a native form field directly above the
+                // sublist - not a sublist toolbar button, since serverWidget.Sublist has no dropdown control, only
+                // addButton(). Changing it fires fieldChanged in gts_cs.js, which navigates like Previous/Next did.
+                PAGE_SELECT:       'custpage_qpg_cstmt_gts_res_page_select',
                 // Hidden field carrying forward every marked customer id from a page OTHER than the one being
                 // rendered - see gts_form_lib.js's addResultsSublist and getAllMarkedCustomerIds below.
                 SELECTED_IDS: 'custpage_qpg_cstmt_gts_selected_ids',
@@ -103,7 +110,11 @@ define(['N/url'],
                 // deletes it.
                 DOWNLOAD_PDF:  'downloadpdf',
                 // Query param carrying the temp file's id, read back by the DOWNLOAD_PDF branch.
-                FILE_ID:       'custpage_qpg_cstmt_gts_file_id'
+                FILE_ID:       'custpage_qpg_cstmt_gts_file_id',
+                // Email Statement's own action - queues gts_email_mr.js via gts_task_lib.js, same as PRINT_PDF
+                // does for gts_mr.js. Shares CUSTOMER_IDS/STATUS_CHECK/RUN_ID/TASK_ID above; has no download
+                // step of its own since nothing is streamed back - the progress page just shows a send summary.
+                EMAIL_STATEMENT: 'emailstatement'
             },
             // gts_mr.js's own script id + parameters, and the N/cache name its summarize stage reports through -
             // shared so gts_task_lib.js and gts_mr.js can't drift apart. Deployment note: this MapReduceScript
@@ -122,6 +133,26 @@ define(['N/url'],
                 },
                 // N/cache key namespace gts_mr.js writes results to (keyed by RUN_ID) and gts_task_lib.js polls.
                 STATUS_CACHE_NAME: 'bb1_qpg_cstmt_gts_status'
+            },
+            // gts_email_mr.js's own script id + parameters - mirrors MR above but for the Email Statement job
+            // (one email per marked customer, own single-page PDF attached, no merge/download step). Shares
+            // MR.STATUS_CACHE_NAME (unique per RUN_ID regardless of which job wrote it). Deployment note: same
+            // as MR - this MapReduceScript record/deployment and its Free-Form Text parameters must be created
+            // manually in the NetSuite UI (this project's SDF source doesn't track Script/ScriptDeployment
+            // objects).
+            EMAIL_MR: {
+                SCRIPT_ID: 'customscript_bb1_qpg_cstmt_gts_email_mr',
+                PARAM: {
+                    CUSTOMER_IDS:   'custscript_bb1_qpg_cstmt_eml_cust_ids',
+                    START_DATE:     'custscript_bb1_qpg_cstmt_eml_start_date',
+                    STATEMENT_DATE: 'custscript_bb1_qpg_cstmt_eml_stmnt_date',
+                    ROLLUP:         'custscript_bb1_qpg_cstmt_eml_rollup',
+                    RUN_ID:         'custscript_bb1_qpg_cstmt_eml_run_id',
+                    // Internal id of the employee to send as (resolved once, at submission time, from
+                    // gts_email_lib.js's static FROM_EMAIL_ADDRESS - N/email.send's author must be an employee
+                    // id, not a raw address) - see gts_task_lib.js's submitEmailStatementTask.
+                    AUTHOR_ID:      'custscript_bb1_qpg_cstmt_eml_author_id'
+                }
             }
         }
 
@@ -138,7 +169,7 @@ define(['N/url'],
         };
 
         // Customer List rows per page - single source of truth for form_lib's pagination.
-        const PAGE_SIZE = 2;
+        const PAGE_SIZE = 15;
 
         const LIB_FX = {};
 
@@ -155,14 +186,6 @@ define(['N/url'],
         // missing/invalid. form_lib still clamps this against the actual page count once the search has run.
         LIB_FX.getPageIndexFromParams = (params) => {
             const raw = params && params[_FIELDS.PAGE_PARAM];
-            const pageIndex = parseInt(raw, 10);
-            return isNaN(pageIndex) || pageIndex < 0 ? 0 : pageIndex;
-        }
-
-        // Client-side counterpart to getPageIndexFromParams, reading the page index off window.location.search.
-        // Used by goToPreviousPage/goToNextPage since a sublist button's functionName takes no arguments.
-        LIB_FX.getCurrentPageIndexFromLocation = () => {
-            const raw = new URLSearchParams(window.location.search).get(_FIELDS.PAGE_PARAM);
             const pageIndex = parseInt(raw, 10);
             return isNaN(pageIndex) || pageIndex < 0 ? 0 : pageIndex;
         }
@@ -266,9 +289,9 @@ define(['N/url'],
             return `${year}-${month}-${day}`;
         }
 
-        // Builds the Generate Statement print URL with the full cross-page marked customer id set, the date/
-        // rollup values, and the print action flag. Client-side only.
-        LIB_FX.buildPrintUrl = (currentRecord) => {
+        // Shared by buildPrintUrl/buildEmailUrl below - both carry the same full cross-page marked customer id
+        // set and date/rollup values, differing only in which action they trigger. Client-side only.
+        const buildMarkedActionUrl = (currentRecord, actionValue) => {
             const params = new URLSearchParams(window.location.search);
 
             params.set(_FIELDS.FORM.START_DATE, formatDateParam(currentRecord.getValue({fieldId: _FIELDS.FORM.START_DATE})));
@@ -276,10 +299,18 @@ define(['N/url'],
             params.set(_FIELDS.FORM.ROLL_PRIOR_CHARGES,
                 isChecked(currentRecord.getValue({fieldId: _FIELDS.FORM.ROLL_PRIOR_CHARGES})) ? 'T' : 'F');
             params.set(_FIELDS.ACTION.CUSTOMER_IDS, LIB_FX.getAllMarkedCustomerIds(currentRecord).join(','));
-            params.set(_FIELDS.ACTION.PARAM, _FIELDS.ACTION.PRINT_PDF);
+            params.set(_FIELDS.ACTION.PARAM, actionValue);
 
             return `${window.location.pathname}?${params.toString()}`;
         }
+
+        // Builds the Generate Statement print URL - opened in a new tab that shows a progress page until the
+        // merged PDF is ready (see gts_task_lib.js's buildConfirmationForm).
+        LIB_FX.buildPrintUrl = (currentRecord) => buildMarkedActionUrl(currentRecord, _FIELDS.ACTION.PRINT_PDF);
+
+        // Builds the Email Statement URL - opened in a new tab that shows a progress page until every marked
+        // customer's email has been sent (see gts_task_lib.js's buildEmailConfirmationForm).
+        LIB_FX.buildEmailUrl = (currentRecord) => buildMarkedActionUrl(currentRecord, _FIELDS.ACTION.EMAIL_STATEMENT);
 
         // Builds the URL for a Customer List page change, carrying the requested page index and the full
         // cross-page selection so the next page renders pre-checked. Clears ACTION.PARAM so a page change never

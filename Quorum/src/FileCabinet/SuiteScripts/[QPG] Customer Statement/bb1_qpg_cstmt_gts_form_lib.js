@@ -22,6 +22,9 @@
  *                                          current page by adding cross-page selection tracking and Select
  *                                          All/Clear All, then moved Select All/Clear All/Previous/Next onto the
  *                                          Customer List sublist's own toolbar for visibility.
+ * 07-September-2026    Jared Espineli      Replaced Previous/Next with a page-range SELECT dropdown above the
+ *                                          sublist (serverWidget.Sublist has no native dropdown toolbar control),
+ *                                          and raised PAGE_SIZE to 15.
  *
  * Copyright (c) 2026 BlueBridge One Business Solutions, All Rights Reserved
  * support@bluebridgeone.com, UK Support: +44 (0)1932 300007 SA Support: +27 (0)10 500 8674
@@ -113,36 +116,55 @@ define(['N/search', 'N/runtime', 'N/log', 'N/ui/serverWidget', './bb1_qpg_cstmt_
             return ids;
         }
 
-        // Adds the Select All/Clear All/Previous/Next controls directly onto the Customer List sublist's own
-        // toolbar via sublist.addButton() - Previous/Next are greyed out (Button.isDisabled) rather than omitted
-        // when there's no adjacent page, so their position never shifts.
-        const addSublistToolbarButtons = (sublist, totalCount, pageIndex, pageCount) => {
-            if (totalCount) {
-                sublist.addButton({
-                    id: _FIELDS.RESULTS.SELECT_ALL_BUTTON,
-                    label: `Select All (${totalCount})`,
-                    functionName: 'selectAllPages'
-                });
-                sublist.addButton({
-                    id: _FIELDS.RESULTS.CLEAR_ALL_BUTTON,
-                    label: 'Clear All',
-                    functionName: 'clearAllPages'
-                });
+        // Adds the Select All/Clear All controls directly onto the Customer List sublist's own toolbar via
+        // sublist.addButton() - page navigation itself is a separate SELECT field (see addPageRangeField)
+        // since sublist toolbars can only hold buttons, not dropdowns.
+        const addSublistToolbarButtons = (sublist, totalCount) => {
+            if (!totalCount) return;
+
+            sublist.addButton({
+                id: _FIELDS.RESULTS.SELECT_ALL_BUTTON,
+                label: `Select All (${totalCount})`,
+                functionName: 'selectAllPages'
+            });
+            sublist.addButton({
+                id: _FIELDS.RESULTS.CLEAR_ALL_BUTTON,
+                label: 'Clear All',
+                functionName: 'clearAllPages'
+            });
+        }
+
+        // Builds the dropdown's option list - one entry per page, labelled with its row range (e.g. "1-15",
+        // "16-30"), the last one clipped to totalCount rather than overshooting into a partial page.
+        const buildPageRangeOptions = (pageCount, totalCount) => {
+            const options = [];
+
+            for (let pageIndex = 0; pageIndex < pageCount; pageIndex++) {
+                const rangeStart = (pageIndex * PAGE_SIZE) + 1;
+                const rangeEnd = Math.min((pageIndex + 1) * PAGE_SIZE, totalCount);
+                options.push({value: String(pageIndex), text: `${rangeStart}-${rangeEnd}`});
             }
 
-            const previousButton = sublist.addButton({
-                id: _FIELDS.RESULTS.PREVIOUS_BUTTON,
-                label: '« Previous',
-                functionName: 'goToPreviousPage'
-            });
-            previousButton.isDisabled = pageIndex <= 0;
+            return options;
+        }
 
-            const nextButton = sublist.addButton({
-                id: _FIELDS.RESULTS.NEXT_BUTTON,
-                label: 'Next »',
-                functionName: 'goToNextPage'
+        // Adds the page-range SELECT field (e.g. "1-15", "16-30", "31-45") directly above the sublist - a
+        // native form field, not a sublist toolbar control (see addSublistToolbarButtons). Selecting an option
+        // fires fieldChanged in gts_cs.js, which navigates the same way Previous/Next used to.
+        const addPageRangeField = (form, totalCount, pageIndex, pageCount) => {
+            if (!totalCount) return;
+
+            const pageSelectField = form.addField({
+                id: _FIELDS.RESULTS.PAGE_SELECT,
+                type: serverWidget.FieldType.SELECT,
+                label: 'Page'
             });
-            nextButton.isDisabled = pageIndex >= pageCount - 1;
+
+            buildPageRangeOptions(pageCount, totalCount).forEach((option) => {
+                pageSelectField.addSelectOption({value: option.value, text: option.text});
+            });
+
+            pageSelectField.defaultValue = String(pageIndex);
         }
 
         // Adds the Customer List sublist (one page's worth of rows, per helperLib.LIB_FX.PAGE_SIZE) below the fields
@@ -174,13 +196,16 @@ define(['N/search', 'N/runtime', 'N/log', 'N/ui/serverWidget', './bb1_qpg_cstmt_
             // Every id matching the search, across all pages - backs the Select All button (RESULTS.ALL_IDS below).
             const allIds = getAllResultIds(loadedSearch, totalCount);
 
+            // Rendered before the sublist itself so it appears directly above it.
+            addPageRangeField(form, totalCount, pageIndex, pageCount);
+
             const sublist = form.addSublist({
                 id: _FIELDS.RESULTS.SUBLIST_ID,
                 type: serverWidget.SublistType.LIST,
                 label: buildSublistRangeLabel(pageIndex, totalCount)
             });
 
-            addSublistToolbarButtons(sublist, totalCount, pageIndex, pageCount);
+            addSublistToolbarButtons(sublist, totalCount);
 
             sublist.addField({id: _FIELDS.RESULTS.SELECT, type: serverWidget.FieldType.CHECKBOX, label: ' '});
 

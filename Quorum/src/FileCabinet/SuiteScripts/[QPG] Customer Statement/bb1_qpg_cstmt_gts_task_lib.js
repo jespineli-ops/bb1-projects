@@ -26,6 +26,12 @@
  *                                          task.checkStatus() progress polling - a COMPLETE task with nothing
  *                                          in the cache now surfaces a clear error (pointing at a likely-missing
  *                                          RUN_ID deployment Parameter) instead of polling forever.
+ * 07-September-2026    Jared Espineli      Added Email Statement - submitEmailStatementTask (queues
+ *                                          gts_email_mr.js, resolving the sender employee ONCE via
+ *                                          gts_email_lib.js rather than per customer) and
+ *                                          buildEmailConfirmationForm, factoring the progress page itself onto
+ *                                          a shared buildProgressPage so the two flows' near-identical bar/poll
+ *                                          markup isn't duplicated.
  *
  * Copyright (c) 2026 BlueBridge One Business Solutions, All Rights Reserved
  * support@bluebridgeone.com, UK Support: +44 (0)1932 300007 SA Support: +27 (0)10 500 8674
@@ -33,7 +39,8 @@
  * @NApiVersion 2.1
  * @NModuleScope SameAccount
  */
-define(['N/task', 'N/runtime', 'N/url', 'N/cache', 'N/ui/serverWidget', 'N/log', './bb1_qpg_cstmt_gts_lib_helper'],
+define(['N/task', 'N/runtime', 'N/url', 'N/cache', 'N/ui/serverWidget', 'N/log', './bb1_qpg_cstmt_gts_lib_helper',
+        './bb1_qpg_cstmt_gts_email_lib'],
     /**
      * @param{task} task
      * @param{runtime} runtime
@@ -42,8 +49,9 @@ define(['N/task', 'N/runtime', 'N/url', 'N/cache', 'N/ui/serverWidget', 'N/log',
      * @param{serverWidget} serverWidget
      * @param{log} log
      * @param{helperLib} helperLib
+     * @param{emailLib} emailLib
      */
-    (task, runtime, url, cache, serverWidget, log, helperLib) => {
+    (task, runtime, url, cache, serverWidget, log, helperLib, emailLib) => {
 
         const _FIELDS = helperLib._FIELDS;
 
@@ -93,6 +101,35 @@ define(['N/task', 'N/runtime', 'N/url', 'N/cache', 'N/ui/serverWidget', 'N/log',
 
             const nsTaskId = mrTask.submit();
             log.debug('Queued Generate Statement MR task', `task ${nsTaskId}, run ${runId}, ${customerIds.length} customer(s)`);
+
+            return {runId, nsTaskId, customerCount: customerIds.length};
+        }
+
+        // Queues gts_email_mr.js with this request's marked customer ids/date filters, same shape as
+        // submitGenerateStatementTask above. The sender employee is resolved to an internal id HERE, once per
+        // submission (not once per customer in the map stage) via gts_email_lib.js's resolveAuthorId, and
+        // passed in as a script parameter - a blank result there just means every customer's send fails with a
+        // clear reason (see gts_email_mr.js's map), rather than blocking submission outright.
+        LIB_FX.submitEmailStatementTask = (params) => {
+            const customerIds = helperLib.LIB_FX.parseIdListParam(params && params[_FIELDS.ACTION.CUSTOMER_IDS]);
+            const runId = generateRunId();
+            const authorId = emailLib.LIB_FX.resolveAuthorId();
+
+            const mrTask = task.create({
+                taskType: task.TaskType.MAP_REDUCE,
+                scriptId: _FIELDS.EMAIL_MR.SCRIPT_ID,
+                params: {
+                    [_FIELDS.EMAIL_MR.PARAM.RUN_ID]: runId,
+                    [_FIELDS.EMAIL_MR.PARAM.CUSTOMER_IDS]: customerIds.join(','),
+                    [_FIELDS.EMAIL_MR.PARAM.START_DATE]: String((params && params[_FIELDS.FORM.START_DATE]) || ''),
+                    [_FIELDS.EMAIL_MR.PARAM.STATEMENT_DATE]: String((params && params[_FIELDS.FORM.STATEMENT_DATE]) || ''),
+                    [_FIELDS.EMAIL_MR.PARAM.ROLLUP]: (params && params[_FIELDS.FORM.ROLL_PRIOR_CHARGES]) === 'F' ? 'F' : 'T',
+                    [_FIELDS.EMAIL_MR.PARAM.AUTHOR_ID]: String(authorId || '')
+                }
+            });
+
+            const nsTaskId = mrTask.submit();
+            log.debug('Queued Email Statement MR task', `task ${nsTaskId}, run ${runId}, ${customerIds.length} customer(s)`);
 
             return {runId, nsTaskId, customerCount: customerIds.length};
         }
@@ -188,31 +225,39 @@ define(['N/task', 'N/runtime', 'N/url', 'N/cache', 'N/ui/serverWidget', 'N/log',
             }
         }
 
-        // A progress page shown in place of the PDF - its own plain <script> polls checkGenerateStatementStatus
-        // every POLL_INTERVAL_MS, updating the bar, until a response carries a downloadUrl or an error.
-        LIB_FX.buildConfirmationForm = (submission) => {
-            const form = serverWidget.createForm({title: 'Generate Statement'});
-            const statusCheckUrl = buildStatusCheckUrl(submission.runId, submission.nsTaskId);
+        // Styling shared by every progress page below - extracted so buildProgressPage doesn't repeat it once
+        // per caller.
+        const PROGRESS_STYLES = `
+            <style>
+                .bb1-cstmt-progress-wrap { max-width: 480px; font-size: 12px; }
+                .bb1-cstmt-progress-track { background: #E5E5E5; border-radius: 4px; height: 14px; overflow: hidden; }
+                .bb1-cstmt-progress-fill {
+                    background: #2C5266; height: 100%; width: 0%;
+                    transition: width 0.4s ease; border-radius: 4px;
+                }
+                .bb1-cstmt-progress-fill.bb1-cstmt-progress-error { background: #B23B3B; }
+                .bb1-cstmt-progress-status { margin-top: 8px; color: #555555; }
+            </style>
+        `;
+
+        // A progress page shown while a background Map/Reduce job runs - its own plain <script> polls
+        // config.statusCheckUrl every POLL_INTERVAL_MS, updating the bar, until a response carries an error or
+        // ready:true. config.readyHandlerJs is inlined as the body of a function(data) called once ready:true
+        // arrives (barEl/statusEl/setPercent/showError are all in scope for it to use) - Generate Statement
+        // redirects to the finished PDF there, Email Statement shows a send summary instead. Shared here since
+        // both flows are otherwise near-identical bar/poll markup - see buildConfirmationForm/
+        // buildEmailConfirmationForm below.
+        const buildProgressPage = (config) => {
+            const form = serverWidget.createForm({title: config.title});
 
             form.addField({
-                id: 'custpage_qpg_cstmt_gts_confirm',
+                id: config.fieldId,
                 type: serverWidget.FieldType.INLINEHTML,
                 label: 'Confirmation'
             }).defaultValue = `
-                <style>
-                    .bb1-cstmt-progress-wrap { max-width: 480px; font-size: 12px; }
-                    .bb1-cstmt-progress-track { background: #E5E5E5; border-radius: 4px; height: 14px; overflow: hidden; }
-                    .bb1-cstmt-progress-fill {
-                        background: #2C5266; height: 100%; width: 0%;
-                        transition: width 0.4s ease; border-radius: 4px;
-                    }
-                    .bb1-cstmt-progress-fill.bb1-cstmt-progress-error { background: #B23B3B; }
-                    .bb1-cstmt-progress-status { margin-top: 8px; color: #555555; }
-                </style>
+                ${PROGRESS_STYLES}
                 <div class="bb1-cstmt-progress-wrap">
-                    <p>Generating the statement for ${submission.customerCount} customer(s) - this runs in the
-                    background and may take a few minutes for a large selection. This tab will open the PDF
-                    automatically once it's ready - please keep it open.</p>
+                    ${config.introHtml}
                     <div class="bb1-cstmt-progress-track">
                         <div id="bb1-cstmt-gts-bar" class="bb1-cstmt-progress-fill"></div>
                     </div>
@@ -220,7 +265,7 @@ define(['N/task', 'N/runtime', 'N/url', 'N/cache', 'N/ui/serverWidget', 'N/log',
                 </div>
                 <script>
                 (function () {
-                    var pollUrl = ${JSON.stringify(statusCheckUrl)};
+                    var pollUrl = ${JSON.stringify(config.statusCheckUrl)};
                     var maxAttempts = ${POLL_MAX_ATTEMPTS};
                     var intervalMs = ${POLL_INTERVAL_MS};
                     var attempts = 0;
@@ -233,7 +278,11 @@ define(['N/task', 'N/runtime', 'N/url', 'N/cache', 'N/ui/serverWidget', 'N/log',
 
                     function showError(message) {
                         barEl.classList.add('bb1-cstmt-progress-error');
-                        statusEl.textContent = 'Could not generate the statement: ' + message;
+                        statusEl.textContent = 'Could not complete: ' + message;
+                    }
+
+                    function onReady(data) {
+                        ${config.readyHandlerJs}
                     }
 
                     function poll() {
@@ -246,18 +295,16 @@ define(['N/task', 'N/runtime', 'N/url', 'N/cache', 'N/ui/serverWidget', 'N/log',
                                     showError(data.error);
                                     return;
                                 }
-                                if (data.ready && data.downloadUrl) {
-                                    setPercent(100);
-                                    statusEl.textContent = 'Done - opening the PDF...';
-                                    window.location.href = data.downloadUrl;
+                                if (data.ready) {
+                                    onReady(data);
                                     return;
                                 }
                                 if (typeof data.percent === 'number') {
                                     setPercent(data.percent);
-                                    statusEl.textContent = 'Generating... ' + data.percent + '%';
+                                    statusEl.textContent = 'Working... ' + data.percent + '%';
                                 }
                                 if (attempts >= maxAttempts) {
-                                    statusEl.textContent = 'Still generating after several minutes - check back later.';
+                                    statusEl.textContent = 'Still working after several minutes - check back later.';
                                     return;
                                 }
                                 setTimeout(poll, intervalMs);
@@ -278,6 +325,48 @@ define(['N/task', 'N/runtime', 'N/url', 'N/cache', 'N/ui/serverWidget', 'N/log',
 
             return form;
         }
+
+        // Generate Statement's progress page - once ready, redirects this same tab to the finished PDF.
+        LIB_FX.buildConfirmationForm = (submission) => buildProgressPage({
+            title: 'Generate Statement',
+            fieldId: 'custpage_qpg_cstmt_gts_confirm',
+            statusCheckUrl: buildStatusCheckUrl(submission.runId, submission.nsTaskId),
+            introHtml: `<p>Generating the statement for ${submission.customerCount} customer(s) - this runs in the
+                background and may take a few minutes for a large selection. This tab will open the PDF
+                automatically once it's ready - please keep it open.</p>`,
+            readyHandlerJs: `
+                setPercent(100);
+                if (data.downloadUrl) {
+                    statusEl.textContent = 'Done - opening the PDF...';
+                    window.location.href = data.downloadUrl;
+                    return;
+                }
+                statusEl.textContent = 'Done.';
+            `
+        });
+
+        // Email Statement's progress page - once ready, shows the send summary (sent/skipped/failed) written
+        // by gts_email_mr.js's summarize instead of navigating anywhere, since nothing is streamed back.
+        LIB_FX.buildEmailConfirmationForm = (submission) => buildProgressPage({
+            title: 'Email Statement',
+            fieldId: 'custpage_qpg_cstmt_gts_email_confirm',
+            statusCheckUrl: buildStatusCheckUrl(submission.runId, submission.nsTaskId),
+            introHtml: `<p>Emailing the statement to ${submission.customerCount} customer(s) - this runs in the
+                background and may take a few minutes for a large selection. Keep this tab open until it
+                finishes.</p>`,
+            readyHandlerJs: `
+                setPercent(100);
+                if (data.summary) {
+                    var s = data.summary;
+                    var parts = [s.sent + ' sent'];
+                    if (s.skipped) parts.push(s.skipped + ' skipped (no email on file)');
+                    if (s.failed) parts.push(s.failed + ' failed');
+                    statusEl.textContent = 'Done - ' + parts.join(', ') + '.';
+                    return;
+                }
+                statusEl.textContent = 'Done.';
+            `
+        });
 
         return {LIB_FX};
     });
