@@ -3,17 +3,12 @@
  *
  * Teamwork task: N/A
  *
- * Server-only library backing the Email Statement flow - resolves the
- * static From address to an employee internal id (N/email.send's author
- * param requires one, not a raw address - see resolveAuthorId), reads each
- * customer's statement recipient/cc addresses (custentity_bb1_statement_
- * email / custentity_bb1_statement_email_cc, both free-form text fields
- * that may hold several comma-separated addresses), and builds/sends the
- * statement email itself. Used by gts_task_lib.js (author resolved once,
- * at submission) and gts_email_mr.js (everything else, per customer).
+ * Server-only library backing the Email Statement flow - resolves the sender,
+ * reads each customer's statement recipient/cc addresses, and builds/sends
+ * the statement email. Used by gts_task_lib.js and gts_email_mr.js.
  *
  * Date                 Author              Purpose
- * 07-September-2026    Jared Espineli      Initial Release.
+ * 07-September-2026    Jared Espineli      Initial Release - sends statement emails using a static employee id as the sender.
  *
  * Copyright (c) 2026 BlueBridge One Business Solutions, All Rights Reserved
  * support@bluebridgeone.com, UK Support: +44 (0)1932 300007 SA Support: +27 (0)10 500 8674
@@ -29,15 +24,10 @@ define(['N/search', 'N/email', 'N/log'],
      */
     (search, email, log) => {
 
-        // Static "from" address, per project spec (kept as a single named constant, not scattered inline, in
-        // case it later becomes configurable). N/email.send's author must be an employee internal id, not a
-        // raw address, so this is only ever resolved to one via resolveAuthorId - never passed to email.send
-        // directly.
-        const FROM_EMAIL_ADDRESS = 'jespineli@bluebridgeone.com';
+        // Internal id of the employee statement emails are sent as.
+        const AUTHOR_EMPLOYEE_ID = 184;
 
-        // custentity_bb1_statement_email/_cc are both free-form text fields on the Customer record (added
-        // directly in the NetSuite UI - not tracked in this project's SDF source) - may hold several addresses
-        // separated by commas.
+        // Free-form, comma-separated address fields on the Customer record.
         const CUSTOMER_FIELD = {
             EMAIL:    'custentity_bb1_statement_email',
             EMAIL_CC: 'custentity_bb1_statement_email_cc'
@@ -45,15 +35,14 @@ define(['N/search', 'N/email', 'N/log'],
 
         const LIB_FX = {};
 
-        LIB_FX.FROM_EMAIL_ADDRESS = FROM_EMAIL_ADDRESS;
+        LIB_FX.AUTHOR_EMPLOYEE_ID = AUTHOR_EMPLOYEE_ID;
 
         //-----------------------------------------------
         //Address parsing - both custentity fields are
         //free-form, comma-separated
         //-----------------------------------------------
 
-        // Splits a free-form, comma-separated address field into a trimmed, de-duplicated list. '' / null /
-        // undefined -> [].
+        // Splits a comma-separated address field into a trimmed, de-duplicated list.
         LIB_FX.parseAddressList = (value) => {
             if (!value) return [];
 
@@ -76,35 +65,14 @@ define(['N/search', 'N/email', 'N/log'],
         //gts_task_lib.js), not once per customer
         //-----------------------------------------------
 
-        // Resolves FROM_EMAIL_ADDRESS to an active employee's internal id - N/email.send's author param
-        // requires one, not a raw address. Returns null (logging why) if no matching active employee is found.
-        LIB_FX.resolveAuthorId = () => {
-            try {
-                const results = search.create({
-                    type: search.Type.EMPLOYEE,
-                    filters: [['email', 'is', FROM_EMAIL_ADDRESS], 'AND', ['isinactive', 'is', 'F']],
-                    columns: ['internalid']
-                }).run().getRange({start: 0, end: 1});
-
-                if (!results.length) {
-                    log.error('Email Statement sender not found', `No active employee has email ${FROM_EMAIL_ADDRESS}`);
-                    return null;
-                }
-
-                return results[0].getValue({name: 'internalid'});
-            } catch (e) {
-                log.error('resolveAuthorId failed', e.message);
-                return null;
-            }
-        }
+        // Returns the sender's employee id.
+        LIB_FX.resolveAuthorId = () => AUTHOR_EMPLOYEE_ID;
 
         //-----------------------------------------------
         //Per-customer recipient/cc addresses
         //-----------------------------------------------
 
-        // This customer's statement recipient/cc addresses, parsed from the free-form entity fields. Isolated
-        // in its own try/catch, same as gts_data_lib.js's entity field lookups - a lookup failure degrades to
-        // "no addresses" (the map stage skips the customer) rather than failing the whole run.
+        // Gets this customer's statement recipient/cc addresses. Returns empty lists instead of throwing on failure.
         LIB_FX.getStatementEmailFields = (customerId) => {
             try {
                 const fields = search.lookupFields({
@@ -151,15 +119,10 @@ define(['N/search', 'N/email', 'N/log'],
         //Send
         //-----------------------------------------------
 
-        // N/email.send's own hard limit - at most 10 recipients total across to/cc/bcc combined. Both
-        // custentity fields are free-form, so a long pasted list could exceed it.
+        // N/email.send allows at most 10 recipients total (to + cc + bcc).
         const MAX_RECIPIENTS_TOTAL = 10;
 
-        // Sends one customer's statement email. authorId must already be resolved (see resolveAuthorId) - not
-        // done here, so it's only looked up once per run, not once per customer. relatedRecords.entityId logs
-        // the email against the customer's own communication history. If to+cc together exceed
-        // MAX_RECIPIENTS_TOTAL, cc is trimmed to fit (to takes priority - it's the customer's own primary
-        // recipient field) rather than letting N/email.send reject the whole send outright.
+        // Sends one customer's statement email, trimming cc first if the recipient count is over the limit.
         LIB_FX.sendStatementEmail = (options) => {
             const to = options.to || [];
             let cc = options.cc || [];

@@ -3,29 +3,16 @@
  *
  * Teamwork task: N/A
  *
- * Handles UI logic for the Generate Statement page - renders the form and,
- * when Generate Statement is clicked, queues the background PDF-generation
- * job (gts_mr.js, via gts_task_lib.js), showing a progress page that polls
- * until the PDF is ready and streams it (then deletes it - see the
- * DOWNLOAD_PDF branch below). Reached from the Customer Statement
- * Suitelet's Search Customer button, which carries over the Customer/
- * Category selection as request params.
+ * Suitelet for the Generate Statement page. Renders the form, queues background
+ * PDF-generation or email jobs for large selections, and lets the progress page
+ * poll status. Also streams the finished PDF for printing or one-shot download.
  *
  * Date             Author              Purpose
- * 02-September-2026    Jared Espineli      Initial Release, passing request.parameters through to buildForm()
- *                                          so the carried-over Customer/Category filter reaches the Customer
- *                                          List sublist.
- * 03-September-2026    Jared Espineli      Added the print action (streams the merged statement PDF when
- *                                          Generate Statement's PRINT_PDF param is set) and confirmed the
- *                                          Customer List's page index passes through request.parameters
- *                                          unchanged.
- * 04-September-2026    Jared Espineli      Fixed Generate Statement crashing on a large selection by queuing a
- *                                          background gts_mr.js Map/Reduce job instead of streaming the PDF
- *                                          inline, and added the STATUS_CHECK/DOWNLOAD_PDF actions for the
- *                                          progress page to poll and then stream+delete the finished PDF.
- * 07-September-2026    Jared Espineli      Added the EMAIL_STATEMENT action, queuing gts_email_mr.js the same
- *                                          way PRINT_PDF queues gts_mr.js - reuses STATUS_CHECK to poll, but has
- *                                          no download step of its own since nothing is streamed back.
+ * 02-September-2026    Jared Espineli      Initial Release - passes request.parameters through to buildForm() so the carried-over Customer/Category filter reaches the Customer List sublist.
+ * 03-September-2026    Jared Espineli      Added the print action that streams the merged statement PDF, and confirmed the Customer List's page index passes through unchanged.
+ * 04-September-2026    Jared Espineli      Fixed crashes on large selections by queuing a background Map/Reduce job to generate the PDF, with STATUS_CHECK/DOWNLOAD_PDF actions for the progress page.
+ * 07-September-2026    Jared Espineli      Added the EMAIL_STATEMENT action to queue statement emails, reusing STATUS_CHECK to poll progress.
+ * 08-September-2026    Jared Espineli      Made DOWNLOAD_PDF handle an already-gone temp file gracefully by redirecting back to Customer Search instead of showing a raw error.
  *
  * Copyright (c) 2026 BlueBridge One Business Solutions, All Rights Reserved
  * support@bluebridgeone.com, UK Support: +44 (0)1932 300007 SA Support: +27 (0)10 500 8674
@@ -34,15 +21,16 @@
  * @NScriptType Suitelet
  * @NModuleScope SameAccount
  */
-define(['N/file', 'N/log', './bb1_qpg_cstmt_gts_form_lib', './bb1_qpg_cstmt_gts_task_lib', './bb1_qpg_cstmt_gts_lib_helper'],
+define(['N/file', 'N/http', 'N/log', './bb1_qpg_cstmt_gts_form_lib', './bb1_qpg_cstmt_gts_task_lib', './bb1_qpg_cstmt_gts_lib_helper'],
     /**
      * @param{file} file
+     * @param{http} http
      * @param{log} log
      * @param{formLib} formLib
      * @param{taskLib} taskLib
      * @param{helperLib} helperLib
      */
-    (file, log, formLib, taskLib, helperLib) => {
+    (file, http, log, formLib, taskLib, helperLib) => {
 
         const _FIELDS = helperLib._FIELDS;
 
@@ -58,15 +46,14 @@ define(['N/file', 'N/log', './bb1_qpg_cstmt_gts_form_lib', './bb1_qpg_cstmt_gts_
             const action = request.parameters[_FIELDS.ACTION.PARAM];
 
             if (action === _FIELDS.ACTION.PRINT_PDF) {
-                // Queues gts_mr.js instead of rendering the PDF here (see gts_task_lib.js).
+                // Queues the PDF-generation job instead of rendering the PDF here.
                 const submission = taskLib.LIB_FX.submitGenerateStatementTask(request.parameters);
                 response.writePage(taskLib.LIB_FX.buildConfirmationForm(submission));
                 return;
             }
 
             if (action === _FIELDS.ACTION.EMAIL_STATEMENT) {
-                // Queues gts_email_mr.js - one email per marked customer, each with their own single-page
-                // statement PDF attached (see gts_email_mr.js/gts_email_lib.js).
+                // Queues the email-statement job - one email per selected customer, each with its own PDF attached.
                 const submission = taskLib.LIB_FX.submitEmailStatementTask(request.parameters);
                 response.writePage(taskLib.LIB_FX.buildEmailConfirmationForm(submission));
                 return;
@@ -81,13 +68,28 @@ define(['N/file', 'N/log', './bb1_qpg_cstmt_gts_form_lib', './bb1_qpg_cstmt_gts_
                 return;
             }
 
-            // What the progress page navigates to once ready - streams the temp PDF gts_mr.js saved, then
-            // deletes it. The delete is best-effort and doesn't block the response - the file's content is
-            // already captured for the outgoing response by the time writeFile() returns.
+            // What the progress page navigates to once ready - streams the finished PDF as an HTML
+            // wrapper that warns about refreshing, then deletes the temp file.
             if (action === _FIELDS.ACTION.DOWNLOAD_PDF) {
                 const fileId = request.parameters[_FIELDS.ACTION.FILE_ID];
-                const pdfFile = file.load({id: fileId});
-                response.writeFile({file: pdfFile, isInline: true});
+
+                // The URL is one-shot; if the file is already gone (e.g. a refresh), redirect back to
+                // Customer Search instead of erroring.
+                let pdfFile;
+                try {
+                    pdfFile = file.load({id: fileId});
+                } catch (e) {
+                    log.debug('DOWNLOAD_PDF file no longer available', `fileId ${fileId}: ${e.message}`);
+                    response.sendRedirect({
+                        type: http.RedirectType.SUITELET,
+                        identifier: helperLib.LIB_FX.BACK_TO_SEARCH.scriptId,
+                        id: helperLib.LIB_FX.BACK_TO_SEARCH.deploymentId
+                    });
+                    return;
+                }
+
+                response.setHeader({name: 'Content-Type', value: 'text/html'});
+                response.write({output: taskLib.LIB_FX.buildPdfViewerPage(pdfFile.name, pdfFile.getContents())});
 
                 try {
                     file.delete({id: fileId});

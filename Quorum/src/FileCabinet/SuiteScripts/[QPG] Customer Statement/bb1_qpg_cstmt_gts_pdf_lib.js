@@ -3,43 +3,17 @@
  *
  * Teamwork task: N/A
  *
- * Server-only library that queries/assembles the tenant statement data AND
- * renders the Generate Statement Suitelet's PDF from it - one merged PDF
- * covering every customer marked in the Customer List, each as its own
- * page (separated by a page break). Data layer: header (entity/VAT/
- * property/bank detail), the AR activity rows with a running balance and
- * Balance B/f roll-up, invoice item-line detail, and the aging summary -
- * ported from the standalone Quorum tenant statement Suitelet
- * (bb1_qpg_stmt_sl.js, v23-2026-08-30). Render layer: the header (logo,
- * Entity/Property panel, customer block), the statement date/from/for-the-
- * month line, the AR activity table, the totals block, and a Queries/
- * aging-days strip - matching "Tenant Statements - Commercial.pdf" up to
- * the aging strip; everything after that is dropped in favour of a plain
- * page number, per spec.
+ * Server-only library that queries and assembles the tenant statement data, then renders it into the
+ * Generate Statement Suitelet's PDF - one merged PDF with a page per marked customer. The data layer
+ * builds the header (entity/VAT/property/bank detail), AR activity rows with a running balance, invoice
+ * item-line detail, and the aging summary. The render layer produces the header, statement date line,
+ * AR activity table, totals block, and a Queries/aging-days strip.
  *
  * Date                 Author              Purpose
- * 03-September-2026    Jared Espineli      Initial Release - statement data querying/assembly (header, AR
- *                                          activity rows, invoice lines, aging - then a separate gts_data_lib.js,
- *                                          see the 07-September merge note below) and the PDF header section
- *                                          (logo, Entity/Property panel, customer block); fixed the logo's
- *                                          aspect ratio and wrapped-label letter-spacing rendering bugs.
- * 04-September-2026    Jared Espineli      Fixed getBillingAddress/getEntityFields erroring for every customer
- *                                          ("defaultaddress"/"federalidnumber" aren't valid search.lookupFields
- *                                          columns on Customer/Subsidiary) by switching both to a SuiteQL
- *                                          fallback. Iterated the Entity/Property panel layout (stacked, then
- *                                          back to a plain 4-column grid) to fix rendering bugs, added the rest
- *                                          of the statement (meta line, activity table, totals, queries/aging),
- *                                          restyled the activity table/totals to match the reference design, and
- *                                          split buildPdf into buildCustomerPageXml/wrapPagesAsPdf so gts_mr.js
- *                                          could generate pages per customer in the background.
- * 07-September-2026    Jared Espineli      Extracted buildCustomerStatement (statement data + page XML together)
- *                                          out of buildCustomerPageXml so gts_email_mr.js can get both without
- *                                          running buildStatementData's underlying queries twice - it needs the
- *                                          statement's billingMonth/customer name for the email subject/body too.
- * 07-September-2026    Jared Espineli      Folded gts_data_lib.js into this file (one PDF library instead of
- *                                          two, per project convention) - buildStatementData/buildStatementHeader
- *                                          and every query/lookup helper behind them are now local to this
- *                                          module; nothing outside this file ever called them directly.
+ * 03-September-2026    Jared Espineli      Initial Release - queries and assembles the statement data and renders the PDF header section.
+ * 04-September-2026    Jared Espineli      Fixed address/entity field lookups, added the rest of the statement (activity table, totals, aging), and split PDF generation to run per customer in the background.
+ * 07-September-2026    Jared Espineli      Folded gts_data_lib.js into this file and extracted buildCustomerStatement so all statement data and rendering logic live in one library.
+ * 08-September-2026    Jared Espineli      Bolded key totals/headers, added a Payment Reference line and a clickable Peach Payments logo, and fixed related rendering bugs.
  *
  * Copyright (c) 2026 BlueBridge One Business Solutions, All Rights Reserved
  * support@bluebridgeone.com, UK Support: +44 (0)1932 300007 SA Support: +27 (0)10 500 8674
@@ -47,25 +21,25 @@
  * @NApiVersion 2.1
  * @NModuleScope SameAccount
  */
-define(['N/query', 'N/search', 'N/error', 'N/render', 'N/log', './bb1_qpg_cstmt_gts_lib_helper'],
+define(['N/query', 'N/search', 'N/error', 'N/render', 'N/file', 'N/url', 'N/log', './bb1_qpg_cstmt_gts_lib_helper'],
     /**
      * @param{query} query
      * @param{search} search
      * @param{error} error
      * @param{render} render
+     * @param{file} file
+     * @param{url} url
      * @param{log} log
      * @param{helperLib} helperLib
      */
-    (query, search, error, render, log, helperLib) => {
+    (query, search, error, render, file, url, log, helperLib) => {
 
         const _FIELDS = helperLib._FIELDS;
 
         const LIB_FX = {};
 
         //=================================================
-        //STATEMENT DATA - queries and assembles the tenant
-        //statement data set (formerly gts_data_lib.js, see
-        //the 07-September merge note above)
+        //STATEMENT DATA - queries and assembles the tenant statement data set
         //=================================================
 
         //-----------------------------------------------
@@ -73,22 +47,17 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/log', './bb1_qpg_cstmt_
         //Never hardcode inline - all account values live here
         //-----------------------------------------------
 
-        // Quorum invoices in advance: a statement dated in May bills June, with charges carrying a June
-        // transaction date. The period runs to the end of the billing month while ageing is still measured at
-        // the statement date; set to 0 for arrears billing.
+        // Months the billing period runs ahead of the statement date; set to 0 for arrears billing.
         const ADVANCE_MONTHS = 1;
 
         const AR_ACCOUNT_TYPE = 'AcctRec';
         const SQL_DATE_MASK = 'YYYY-MM-DD';
         const AR_TRAN_TYPES = "'CustInvc','CustCred','CustPymt','CustDep','CustRfnd'";
 
-        // Charges folded into Balance B/f when roll-up is enabled. Payments, deposits and refunds follow the
-        // separate rule below.
+        // Transaction types folded into Balance B/f when roll-up is enabled.
         const ROLLUP_TYPES = "'CustInvc','CustCred'";
 
-        // How far back payments stay itemised, in months before the statement date - only receipts since the
-        // previous statement are itemised, older ones fold into Balance B/f. Charges use the billing month
-        // boundary instead (see ADVANCE_MONTHS).
+        // How many months back payments stay itemised before folding into Balance B/f.
         const PAYMENT_MONTHS = 1;
 
         const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June',
@@ -98,8 +67,7 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/log', './bb1_qpg_cstmt_
         //General helpers
         //-----------------------------------------------
 
-        // Runs a SuiteQL statement and returns its rows. Values reaching this helper have already been
-        // validated by assertId/sqlDate, so no raw input is ever passed through unchecked.
+        // Runs a SuiteQL statement and returns its rows.
         const runQuery = (sql, label) => {
             try {
                 return query.runSuiteQL({query: sql}).asMappedResults();
@@ -136,8 +104,7 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/log', './bb1_qpg_cstmt_
             return String(value);
         }
 
-        // Converts a form date into the YYYY-MM-DD mask the queries use. Handles DD/MM/YYYY and D/M/YYYY;
-        // anything already in the target format is passed through untouched.
+        // Converts a form date (DD/MM/YYYY, D/M/YYYY, or already YYYY-MM-DD) into the YYYY-MM-DD mask the queries use.
         const normaliseDate = (value) => {
             if (!value) return value;
 
@@ -184,8 +151,7 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/log', './bb1_qpg_cstmt_
             return `${yearMonth}-${lastDay < 10 ? '0' + lastDay : lastDay}`;
         }
 
-        // Shifts a full YYYY-MM-DD date by whole months. The day is clamped to the target month's length, so 31
-        // March less one month gives 28 or 29 February rather than rolling into March.
+        // Shifts a full YYYY-MM-DD date by whole months, clamping the day to the target month's length.
         const addMonthsToDate = (date, months) => {
             let day = parseInt(String(date).substring(8, 10), 10);
             const yearMonth = addMonths(String(date).substring(0, 7), months);
@@ -211,9 +177,7 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/log', './bb1_qpg_cstmt_
         }
 
         //-----------------------------------------------
-        //Statement header - Entity, VAT numbers, property/
-        //unit and the pre-formatted bank block all sit on
-        //the most recent invoice in the period
+        //Statement header - entity, VAT, property/unit and bank details from the latest invoice in the period
         //-----------------------------------------------
         const getStatementHeader = (customerId, startDate, periodEnd) => {
 
@@ -263,16 +227,15 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/log', './bb1_qpg_cstmt_
             headerRow.entity_vat_no = entityFields.entity_vat_no;
             headerRow.entity_reg_no = entityFields.entity_reg_no;
             headerRow.payment_url = entityFields.payment_url;
+            headerRow.payment_image_url = entityFields.payment_image_url;
+            headerRow.customer_entity_id = entityFields.customer_entity_id;
             headerRow.bill_address = getBillingAddress(customerId);
 
             return headerRow;
         }
 
         //-----------------------------------------------
-        //Bill-to address - taken from the customer record,
-        //not the invoice, so a moved tenant gets their
-        //current address; queried on its own so a failure
-        //here cannot take the whole statement down
+        //Bill-to address - the customer record's default billing address
         //-----------------------------------------------
         const getBillingAddress = (customerId) => {
 
@@ -319,9 +282,7 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/log', './bb1_qpg_cstmt_
         }
 
         //-----------------------------------------------
-        //Customer and subsidiary fields - each lookup is
-        //isolated so one unavailable field degrades that
-        //value only, never the statement
+        //Customer and subsidiary fields used on the header
         //-----------------------------------------------
         const getEntityFields = (customerId, subsidiaryFromInvoice) => {
 
@@ -334,7 +295,11 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/log', './bb1_qpg_cstmt_
                 // Entity Registration No., distinct from Entity VAT No./Recipient Registration No. - no
                 // subsidiary-level field confirmed yet, so left blank until BB1/the client confirm one.
                 entity_reg_no: '',
-                payment_url: ''
+                payment_url: '',
+                payment_image_url: '',
+                // Customer's own Entity ID (NetSuite's customer-facing number, e.g. "C000123") - printed as the
+                // statement's Payment Reference so a tenant's bank transfer can be matched back to their account.
+                customer_entity_id: ''
             };
 
             let subsidiaryId = subsidiaryFromInvoice || null;
@@ -344,10 +309,11 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/log', './bb1_qpg_cstmt_
                 const customerFields = search.lookupFields({
                     type: search.Type.CUSTOMER,
                     id: customerId,
-                    columns: ['vatregnumber', 'custentity_alf_company_reg_num',
+                    columns: ['entityid', 'vatregnumber', 'custentity_alf_company_reg_num',
                         'custentity_bb1_bank_guarantee', 'depositbalance', 'subsidiary']
                 });
 
+                values.customer_entity_id = customerFields.entityid || '';
                 values.recipient_vat_no = customerFields.vatregnumber || '';
                 values.recipient_reg_no = customerFields.custentity_alf_company_reg_num || '';
                 values.bank_guarantee = customerFields.custentity_bb1_bank_guarantee || '';
@@ -378,16 +344,17 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/log', './bb1_qpg_cstmt_
         }
 
         //-----------------------------------------------
-        //Subsidiary fallback - second attempt at the
-        //subsidiary-level values, queried directly
+        //Subsidiary fallback - fills in subsidiary-level values via SuiteQL
         //-----------------------------------------------
         const fillFromSubsidiaryQuery = (subsidiaryId, values) => {
 
             try {
                 const sql =
                     'SELECT ' +
-                    '    s.federalidnumber                    AS entity_vat_no, ' +
-                    '    s.custrecord_bb1_peach_payment_url   AS payment_url ' +
+                    '    s.federalidnumber                     AS entity_vat_no, ' +
+                    '    s.custrecord_bb1_peach_payment_url     AS payment_url, ' +
+                    // A List/Record(File) field - SuiteQL returns the File Cabinet internal id, not a URL.
+                    '    s.custrecord_bb1_peach_payment_image   AS payment_image_id ' +
                     'FROM subsidiary s ' +
                     `WHERE s.id = ${assertId(subsidiaryId)}`;
 
@@ -396,6 +363,8 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/log', './bb1_qpg_cstmt_
                 if (rows.length) {
                     values.entity_vat_no = values.entity_vat_no || rows[0].entity_vat_no || '';
                     values.payment_url = values.payment_url || rows[0].payment_url || '';
+                    values.payment_image_url = values.payment_image_url ||
+                        resolvePeachPaymentImageUrl(rows[0].payment_image_id);
                 }
 
             } catch (e) {
@@ -406,9 +375,24 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/log', './bb1_qpg_cstmt_
             return values;
         }
 
+        // Turns the payment image's File Cabinet id into an absolute URL. Returns '' if it can't be resolved.
+        const resolvePeachPaymentImageUrl = (fileId) => {
+            if (!fileId) return '';
+
+            try {
+                const imageFile = file.load({id: fileId});
+                const domain = url.resolveDomain({hostType: url.HostType.APPLICATION});
+
+                return `https://${domain}${imageFile.url}`;
+
+            } catch (e) {
+                log.error(`Peach payment image lookup failed for file ${fileId}`, e.message);
+                return '';
+            }
+        }
+
         //-----------------------------------------------
-        //Statement body - Balance brought forward plus all
-        //AR activity in the period, with a running balance
+        //Statement body - Balance B/f plus AR activity in the period, with a running balance
         //-----------------------------------------------
         const getStatementRows = (customerId, startDate, periodEnd, statementDate, billingStart, paymentStart) => {
 
@@ -512,9 +496,7 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/log', './bb1_qpg_cstmt_
         }
 
         //-----------------------------------------------
-        //Invoice item lines - stored negative against
-        //income, so every amount is negated for display;
-        //tax comes from tax1amt (taxamount removed in SuiteQL)
+        //Invoice item lines - line-level detail behind each invoice
         //-----------------------------------------------
         const getInvoiceLines = (customerId, startDate, periodEnd, billingMonth, billingStart) => {
 
@@ -559,8 +541,7 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/log', './bb1_qpg_cstmt_
         }
 
         //-----------------------------------------------
-        //Aging summary - Current/30/60/90/120+ buckets;
-        //120+ is the catch-all for anything over 90 days
+        //Aging summary - Current/30/60/90/120+ day buckets
         //-----------------------------------------------
         const getAgingSummary = (customerId, statementDate, periodEnd) => {
 
@@ -597,13 +578,10 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/log', './bb1_qpg_cstmt_
         }
 
         //-----------------------------------------------
-        //Statement period - shared by both public entry
-        //points since these boundaries only depend on the
-        //statement date
+        //Statement period - date boundaries shared by both public entry points
         //-----------------------------------------------
 
-        // Validates and normalises the two date filters every entry point needs, throwing the same error either
-        // would have thrown inline.
+        // Validates and normalises the start/statement date filters.
         const resolveDates = (f) => {
             const startDate = normaliseDate(f.startDate);
             const statementDate = normaliseDate(f.statementDate);
@@ -618,8 +596,7 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/log', './bb1_qpg_cstmt_
             return {startDate, statementDate};
         }
 
-        // Billing month sits ADVANCE_MONTHS after the statement date's own month, running to the last day of
-        // that month so advance-dated charges are picked up. Payments on or before paymentStart fold into Balance B/f.
+        // Computes the billing month, period end, and rollup boundaries from the statement date.
         const resolvePeriod = (statementDate) => {
             const billingMonth = addMonths(String(statementDate).substring(0, 7), ADVANCE_MONTHS);
 
@@ -632,11 +609,7 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/log', './bb1_qpg_cstmt_
         }
 
         //-----------------------------------------------
-        //Public entry point - header only. Runs just the
-        //header query, for a lighter preview than the full
-        //statement below. Not called anywhere in this
-        //project yet - kept for parity with the standalone
-        //Suitelet this was ported from.
+        //Public entry point - header only, for a lighter preview than the full statement
         //-----------------------------------------------
 
         /**
@@ -665,9 +638,7 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/log', './bb1_qpg_cstmt_
         }
 
         //-----------------------------------------------
-        //Public entry point - full statement. Assembles
-        //header + rows + invoice lines + aging into one
-        //statement object
+        //Public entry point - full statement, assembling header, rows, lines and aging
         //-----------------------------------------------
 
         /**
@@ -748,20 +719,21 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/log', './bb1_qpg_cstmt_
         }
 
         //=================================================
-        //PDF RENDERING - turns statement data (above) into
-        //the merged Generate Statement Suitelet PDF
+        //PDF RENDERING - turns statement data into the merged Generate Statement Suitelet PDF
         //=================================================
 
-        // File Cabinet URL of the Quorum logo used on the tenant statement (not the Tenancy Schedule report's
-        // wordmark logo). Escape any & in this URL as &amp; if it's ever changed.
+        // File Cabinet URL of the Quorum logo. Escape any & as &amp; if this URL changes.
         const LOGO_URL = 'https://11536405.app.netsuite.com/core/media/media.nl' +
             '?id=5936&amp;c=11536405' +
             '&amp;h=ShdVNtHtCNZxRziqz5XaCmH8XthcQqu1MScOaMoTvGlWj9lm';
 
-        // Logo size in points - BFO ignores CSS pixel widths and falls back to native size unless both
-        // dimensions are given. Actual asset ratio is ~2.78:1 landscape; keep that ratio if resized.
+        // Logo size in points - keep the ~2.78:1 aspect ratio if resized.
         const LOGO_WIDTH_PT = 180;
         const LOGO_HEIGHT_PT = 65;
+
+        // Peach Payments logo size in points, shown below the Whatsapp line.
+        const PEACH_LOGO_WIDTH_PT = 48;
+        const PEACH_LOGO_HEIGHT_PT = 48;
 
         // Queries panel shown bottom-left of the statement, next to the aging strip.
         const QUERIES_EMAIL = 'commercial@qholdings.co.za';
@@ -771,8 +743,7 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/log', './bb1_qpg_cstmt_
         //Formatting helpers
         //-----------------------------------------------
 
-        // Escape record data before it reaches the BFO document - BFO parses strict XML, so an unescaped
-        // ampersand/quote in an address or memo would fail the whole render.
+        // Escapes XML special characters before the value reaches the PDF renderer.
         const escapeXml = (value) => {
             if (value === null || value === undefined) return '';
             return String(value)
@@ -791,13 +762,10 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/log', './bb1_qpg_cstmt_
         }
 
         //-----------------------------------------------
-        //Header section - logo + title + customer block
-        //left, Entity/Property panel right
+        //Header section - logo + title + customer block left, Entity/Property panel right
         //-----------------------------------------------
 
-        // One label/value cell pair in the Entity/Property panel's 4-column grid - colspan merges a row with
-        // only one pair across the remaining columns. Content is wrapped in a left-aligned <p> since BFO
-        // justifies wrapped <td> text by default.
+        // Renders one label/value cell pair in the Entity/Property panel grid.
         const panelCell = (label, value, colspan) => {
             const span = colspan ? ` colspan="${colspan}"` : '';
             const valueWidth = colspan ? '' : ' style="width: 20%;"';
@@ -805,9 +773,7 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/log', './bb1_qpg_cstmt_
                 `<td class="cstmt-value"${span}${valueWidth}><p style="text-align: left; margin: 0;">${escapeXml(value)}</p></td>`;
         }
 
-        // Three full-width rows then three two-up rows, matching the reference design's layout. Registration
-        // No. labels are shortened to fit the narrow label column on one line, avoiding a BFO wrap/row-overlap
-        // quirk.
+        // Renders the Entity/Property panel's rows.
         const buildEntityPanel = (header) => `
             <table class="cstmt-panel">
                 <tr>${panelCell('Entity', header.entity_name, 3)}</tr>
@@ -844,8 +810,7 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/log', './bb1_qpg_cstmt_
         }
 
         //-----------------------------------------------
-        //Statement date/from/for-the-month line - replaces
-        //"Tax Invoice No." with "From" (the Start Date)
+        //Statement date/from/for-the-month line
         //-----------------------------------------------
         const buildMetaLine = (statement) => `
             <p class="cstmt-meta">
@@ -856,35 +821,27 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/log', './bb1_qpg_cstmt_
         `;
 
         //-----------------------------------------------
-        //AR activity table - row/column shape adapted from
-        //the POC, matching the reference design's 6-column
-        //header (no Document column)
+        //AR activity table
         //-----------------------------------------------
 
-        // Activity table's own column widths - shared with buildTotalsSection below so its Exclusive/Tax/
-        // Inclusive columns line up exactly under these ones.
+        // Activity table column widths, shared with buildTotalsSection so columns line up.
         const COL_DATE = 12;
         const COL_ALLOCATION = 18;
         const COL_REMARKS = 40;
         const COL_NUM = 10; // Exclusive / Tax / Inclusive, each
 
-        // Left-aligned text cells go through their own <p> to avoid BFO's default wrapped-<td> justification.
-        // Numeric cells never wrap, so they rely on the .num class's text-align: right directly.
+        // Renders a left-aligned text cell and a right-aligned numeric cell.
         const textCell = (value) => `<td><p style="text-align: left; margin: 0;">${escapeXml(value)}</p></td>`;
         const numCell = (value) => `<td class="num">${value}</td>`;
 
-        // One rendered row - rowIndex drives zebra striping and continues seamlessly across statement.rows
-        // boundaries. See flattenActivityRows, which flattens everything into one list first so the stripe
-        // never resets mid-invoice.
+        // Renders one activity table row, striped by rowIndex.
         const activityRow = (entry, rowIndex) => {
             const rowClass = rowIndex % 2 === 1 ? ' class="cstmt-row-alt"' : '';
             return `<tr${rowClass}>${textCell(entry.date)}${textCell(entry.allocation)}${textCell(entry.remarks)}` +
                 `${numCell(entry.exclusive)}${numCell(entry.tax)}${numCell(entry.inclusive)}</tr>`;
         }
 
-        // Flattens statement.rows (+ nested .lines) into one plain list of row entries, in display order. An
-        // invoice's own transaction-level row is suppressed in favour of its item lines; Balance B/f has no
-        // document number or date/tax breakdown since it's a synthetic aggregate.
+        // Flattens statement rows and their nested invoice lines into one display-ordered list.
         const flattenActivityRows = (rows) => {
             const flat = [];
 
@@ -901,12 +858,15 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/log', './bb1_qpg_cstmt_
                     return;
                 }
 
-                const isBroughtForward = row.transaction_type === 'Balance B/f';
+                const allocation = row.transaction_type;
+                const isBroughtForward = allocation === 'Balance B/f';
 
                 flat.push({
                     date: isBroughtForward ? '' : row.transaction_date,
-                    allocation: row.transaction_type,
-                    remarks: row.document_number,
+                    allocation: allocation,
+                    // Payment lines show the payment's own memo instead of the document number - everything
+                    // else keeps the document number.
+                    remarks: allocation === 'Payment' ? row.memo : row.document_number,
                     exclusive: isBroughtForward ? '' : formatAmount(0),
                     tax: isBroughtForward ? '' : formatAmount(0),
                     inclusive: formatAmount(row.amount)
@@ -935,14 +895,10 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/log', './bb1_qpg_cstmt_
         `;
 
         //-----------------------------------------------
-        //Totals block matching the reference screenshot's
-        //Arrears/Current Month Charges/Amount Due box - its
-        //own columns line up under the activity table's
-        //(see COL_* above)
+        //Totals block - Arrears/Current Month Charges/Amount Due
         //-----------------------------------------------
         const buildTotalsSection = (statement, symbol) => {
-            // The totals box occupies Remarks + the 3 numeric columns (70% of the page). Its label/numeric
-            // column shares reuse the same 4:1:1:1 ratio as the activity table, re-based to the box's own 100%.
+            // Builds the totals box, aligned under the activity table's columns.
             const boxWidth = COL_REMARKS + (3 * COL_NUM);
             const labelWidthPct = (COL_REMARKS / boxWidth * 100).toFixed(2);
             const numWidthPct = (COL_NUM / boxWidth * 100).toFixed(2);
@@ -954,20 +910,21 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/log', './bb1_qpg_cstmt_
                             ${statement.header.bank_details
                                 ? `<p style="text-align: left; margin: 0;">${escapeXml(statement.header.bank_details).replace(/\r\n|\r|\n/g, '<br/>')}</p>`
                                 : ''}
+                            <p style="text-align: left; margin: 4pt 0 0 0;">Payment Reference: ${escapeXml(statement.header.customer_entity_id)}</p>
                         </td>
                         <td style="width: ${boxWidth}%; vertical-align: top; border: none;">
                             <table class="cstmt-totals">
                                 <tr>
-                                    <td style="width: ${labelWidthPct}%;">Arrears/Prepaid</td>
+                                    <td class="cstmt-total-bold" style="width: ${labelWidthPct}%;">Arrears/Prepaid</td>
                                     <td class="num" style="width: ${numWidthPct}%;"></td>
                                     <td class="num" style="width: ${numWidthPct}%;"></td>
-                                    <td class="num" style="width: ${numWidthPct}%;">${formatAmount(statement.totals.arrears)}</td>
+                                    <td class="num cstmt-total-bold" style="width: ${numWidthPct}%;">${formatAmount(statement.totals.arrears)}</td>
                                 </tr>
                                 <tr>
-                                    <td style="width: ${labelWidthPct}%;">Current Month Charges</td>
-                                    <td class="num" style="width: ${numWidthPct}%;">${formatAmount(statement.totals.exclusive)}</td>
-                                    <td class="num" style="width: ${numWidthPct}%;">${formatAmount(statement.totals.tax)}</td>
-                                    <td class="num" style="width: ${numWidthPct}%;">${formatAmount(statement.totals.inclusive)}</td>
+                                    <td class="cstmt-total-bold" style="width: ${labelWidthPct}%;">Current Month Charges</td>
+                                    <td class="num cstmt-total-bold" style="width: ${numWidthPct}%;">${formatAmount(statement.totals.exclusive)}</td>
+                                    <td class="num cstmt-total-bold" style="width: ${numWidthPct}%;">${formatAmount(statement.totals.tax)}</td>
+                                    <td class="num cstmt-total-bold" style="width: ${numWidthPct}%;">${formatAmount(statement.totals.inclusive)}</td>
                                 </tr>
                                 <tr class="cstmt-total-row">
                                     <td class="cstmt-total-strong" style="width: ${labelWidthPct}%;">Amount Due</td>
@@ -983,9 +940,7 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/log', './bb1_qpg_cstmt_
         }
 
         //-----------------------------------------------
-        //Queries + aging strip - last section shown;
-        //everything the reference design prints after this
-        //is dropped in favour of a plain page-number footer
+        //Queries + aging strip
         //-----------------------------------------------
         const buildQueriesAgingSection = (statement) => `
             <table class="cstmt-plain" style="width: 100%; margin-top: 8pt;">
@@ -994,6 +949,17 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/log', './bb1_qpg_cstmt_
                         <p class="cstmt-queries">Queries</p>
                         <p>${escapeXml(QUERIES_EMAIL)}</p>
                         <p>Whatsapp Nr: ${escapeXml(QUERIES_WHATSAPP)}</p>
+                        ${statement.header.payment_image_url && statement.header.payment_url
+                            // BFO's <a> wraps text runs reliably, but rarely creates a link annotation over a
+                            // replaced element (an <img>, with no text of its own) - href goes on the <img>
+                            // itself too, which is the more reliable target for a clickable image in this
+                            // renderer. The <a> wrapper is kept as a harmless belt-and-suspenders in case this
+                            // account's BFO build does honour it.
+                            ? `<a href="${escapeXml(statement.header.payment_url)}">` +
+                              `<img src="${escapeXml(statement.header.payment_image_url)}" alt="Peach Payments" ` +
+                              `href="${escapeXml(statement.header.payment_url)}" ` +
+                              `width="${PEACH_LOGO_WIDTH_PT}" height="${PEACH_LOGO_HEIGHT_PT}" /></a>`
+                            : ''}
                     </td>
                     <td style="width: 45%; vertical-align: top; border: none;">
                         <table class="cstmt-aging">
@@ -1021,11 +987,7 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/log', './bb1_qpg_cstmt_
             </table>
         `;
 
-        // One marked customer's statement data AND rendered page XML together - so a caller that also needs the
-        // statement data itself (gts_email_mr.js, for the billing month/customer name in the email subject/
-        // body) doesn't run buildStatementData's underlying queries a second time. Throws on failure - see
-        // buildCustomerPageXml for the page-level fallback, and gts_email_mr.js's own map for how the email job
-        // handles a failure here instead.
+        // Builds one customer's statement data and rendered page XML together. Throws on failure.
         LIB_FX.buildCustomerStatement = (customerId, filters) => {
             const statement = LIB_FX.buildStatementData(Object.assign({}, filters, {customerId}));
             const symbol = statement.header.currency_symbol || 'R';
@@ -1039,8 +1001,7 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/log', './bb1_qpg_cstmt_
             return {statement, pageXml};
         }
 
-        // One marked customer's page - a bad id/query failure prints a short error page instead of taking the
-        // whole merged PDF down. Exported so gts_mr.js's map stage can build one customer's page per map key.
+        // Builds one customer's page XML. Returns a short error page instead of throwing on failure.
         LIB_FX.buildCustomerPageXml = (customerId, filters) => {
             try {
                 return LIB_FX.buildCustomerStatement(customerId, filters).pageXml;
@@ -1054,8 +1015,7 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/log', './bb1_qpg_cstmt_
         //PDF assembly
         //-----------------------------------------------
 
-        // Merges already-built customer pages into one PDF, separated by a page break, in the order given.
-        // Extracted out of buildPdf so gts_mr.js's summarize stage can do this same final merge on its own.
+        // Merges already-built customer pages into one PDF, separated by a page break.
         LIB_FX.wrapPagesAsPdf = (pages) => {
             const body = pages.join('<pbr/>');
 
@@ -1084,7 +1044,7 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/log', './bb1_qpg_cstmt_
                             table.cstmt-panel .cstmt-label { font-weight: bold; font-size: 7pt; color: #555555; }
                             table.cstmt-panel .cstmt-value { font-size: 8.5pt; }
                             table.cstmt-activity { width: 100%; border-collapse: collapse; }
-                            table.cstmt-activity th { text-align: left; padding: 4pt; font-size: 7.5pt; border-bottom: 1pt solid #333333; }
+                            table.cstmt-activity th { text-align: left; padding: 4pt; font-size: 7.5pt; font-weight: bold; border-bottom: 1pt solid #333333; }
                             table.cstmt-activity td { padding: 4pt; font-size: 7.5pt; vertical-align: top; border: none; }
                             table.cstmt-activity .num { text-align: right; }
                             table.cstmt-activity .cstmt-row-alt td { background-color: #F2F2F2; }
@@ -1093,9 +1053,10 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/log', './bb1_qpg_cstmt_
                             table.cstmt-totals .num { text-align: right; }
                             table.cstmt-totals .cstmt-total-row td { border-top: 1pt solid #333333; padding-top: 6pt; }
                             .cstmt-total-strong { font-weight: bold; font-size: 10pt; }
+                            .cstmt-total-bold { font-weight: bold; }
                             .cstmt-queries { font-weight: bold; font-size: 8pt; margin: 0 0 2pt 0; }
                             table.cstmt-aging { width: 100%; border-collapse: collapse; }
-                            table.cstmt-aging th { background-color: #EEEEEE; padding: 4pt; font-size: 7.5pt; }
+                            table.cstmt-aging th { background-color: #EEEEEE; padding: 4pt; font-size: 7.5pt; font-weight: bold; }
                             table.cstmt-aging td { padding: 4pt; font-size: 8pt; }
                             table.cstmt-aging .num { text-align: right; }
                         </style>
@@ -1110,8 +1071,7 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/log', './bb1_qpg_cstmt_
             return render.xmlToPdf({xmlString: xml.trim()});
         }
 
-        // Builds the merged PDF straight from request params - one page per marked customer, in marked order.
-        // No longer called from gts_sl.js; kept as a convenience wrapper around buildCustomerPageXml/wrapPagesAsPdf.
+        // Builds the merged PDF straight from request params, one page per marked customer.
         LIB_FX.buildPdf = (params) => {
             const customerIds = helperLib.LIB_FX.parseIdListParam(params && params[_FIELDS.ACTION.CUSTOMER_IDS]);
 

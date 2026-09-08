@@ -4,23 +4,13 @@
  * Teamwork task: N/A
  *
  * Emails the Customer Statement in the background - one map key per marked
- * customer, mirroring gts_mr.js's Generate Statement job so emailing a
- * large selection doesn't run out of governance/execution time in a single
- * Suitelet request. Each customer gets their OWN single-page statement PDF
- * (not merged) attached to their own email - sent to
- * custentity_bb1_statement_email (cc custentity_bb1_statement_email_cc),
- * both free-form/comma-separated - see gts_email_lib.js for address
- * parsing, subject/body, and the send itself. Triggered via N/task from
- * gts_task_lib.js when Email Statement is clicked. Unlike gts_mr.js there
- * is no file to stream back, so the result reported through N/cache (keyed
- * by RUN_ID, same mechanism as gts_mr.js) is a send summary
- * {sent, skipped, failed, details}, not a file id - gts_task_lib.js's
- * progress page shows that summary directly instead of navigating anywhere.
+ * customer, each getting their own single-page statement PDF by email
+ * (see gts_email_lib.js for addresses/subject/body/send). Triggered via
+ * N/task from gts_task_lib.js. Reports a send summary through N/cache
+ * (keyed by RUN_ID) for the progress page to poll.
  *
  * Date                 Author              Purpose
- * 07-September-2026    Jared Espineli      Initial Release - one email per marked customer with their own
- *                                          single-page statement PDF attached, tallied into a send summary
- *                                          reported through N/cache for the progress page to poll.
+ * 07-September-2026    Jared Espineli      Initial Release - emails each marked customer their own statement PDF and reports a send summary for the progress page.
  *
  * Copyright (c) 2026 BlueBridge One Business Solutions, All Rights Reserved
  * support@bluebridgeone.com, UK Support: +44 (0)1932 300007 SA Support: +27 (0)10 500 8674
@@ -43,18 +33,14 @@ define(['N/runtime', 'N/cache', 'N/log', './bb1_qpg_cstmt_gts_pdf_lib', './bb1_q
 
         const _FIELDS = helperLib._FIELDS;
 
-        // Matches gts_mr.js's own STATUS_TTL_SECONDS - longer than gts_task_lib.js's polling window (~10
-        // minutes), so a slow run's result is still there for the next poll.
+        // How long a run's cached status stays available for the progress page to poll.
         const STATUS_TTL_SECONDS = 3600;
 
         //-----------------------------------------------
         //Triggered from gts_task_lib.js via N/task
         //-----------------------------------------------
 
-        // Writes this run's result to N/cache, keyed by RUN_ID - the only channel back to the progress page's
-        // polling script. Shares gts_mr.js's cache name (MR.STATUS_CACHE_NAME) - safe since RUN_ID is unique
-        // per submission regardless of which job wrote it. See gts_mr.js's own writeStatus for the RUN_ID guard
-        // rationale.
+        // Writes this run's result to N/cache, keyed by RUN_ID, for the progress page to poll.
         const writeStatus = (runId, statusObj) => {
             if (!runId) {
                 log.error('Cannot write status - RUN_ID missing',
@@ -70,8 +56,7 @@ define(['N/runtime', 'N/cache', 'N/log', './bb1_qpg_cstmt_gts_pdf_lib', './bb1_q
             }
         }
 
-        // Reads this run's date/rollup filters - each stage runs independently, so needs a fresh read rather
-        // than a module-level constant.
+        // Reads this run's date/rollup filters from the script parameters.
         const getFilters = () => {
             const currentScript = runtime.getCurrentScript();
             return {
@@ -81,7 +66,7 @@ define(['N/runtime', 'N/cache', 'N/log', './bb1_qpg_cstmt_gts_pdf_lib', './bb1_q
             };
         }
 
-        // One map key per marked customer id, in marked order - mirrors gts_mr.js's getInputData exactly.
+        // One map key per marked customer id, in marked order.
         const getInputData = (inputContext) => {
             try {
                 const customerIds = helperLib.LIB_FX.parseIdListParam(
@@ -99,20 +84,20 @@ define(['N/runtime', 'N/cache', 'N/log', './bb1_qpg_cstmt_gts_pdf_lib', './bb1_q
             }
         }
 
-        // One customer's statement, sent by email. Writes a per-customer result ({status: 'sent'/'skipped'/
-        // 'failed', ...}) for summarize to tally - never throws itself, so one bad customer doesn't stop the
-        // rest of the batch (mirrors gts_mr.js's own per-key isolation).
+        // Emails one customer's statement and writes its result for summarize to tally. Never throws, so one
+        // failed customer doesn't stop the batch.
         const map = (mapContext) => {
             const customerId = mapContext.value;
 
             try {
-                // Script parameters always come back as strings - N/email.send's author must be a Number.
+                // N/email.send's author must be a Number - script parameters come back as strings.
                 const authorId = Number(runtime.getCurrentScript().getParameter({name: _FIELDS.EMAIL_MR.PARAM.AUTHOR_ID}));
 
                 if (!authorId) {
                     mapContext.write(mapContext.key, {
                         status: 'failed', customerId,
-                        reason: `Could not resolve the sender employee for ${emailLib.LIB_FX.FROM_EMAIL_ADDRESS}.`
+                        reason: `Sender employee id ${emailLib.LIB_FX.AUTHOR_EMPLOYEE_ID} did not reach this ` +
+                            'job - check the AUTHOR_ID parameter on this script\'s deployment.'
                     });
                     return;
                 }
@@ -148,8 +133,7 @@ define(['N/runtime', 'N/cache', 'N/log', './bb1_qpg_cstmt_gts_pdf_lib', './bb1_q
             }
         }
 
-        // Tallies every per-customer result (sent/skipped/failed) into one summary, reported through N/cache
-        // (writeStatus) for the progress page to poll - see gts_task_lib.js's buildEmailConfirmationForm.
+        // Tallies every per-customer result into one summary and reports it through N/cache.
         const summarize = (summaryContext) => {
             let runId = null;
 

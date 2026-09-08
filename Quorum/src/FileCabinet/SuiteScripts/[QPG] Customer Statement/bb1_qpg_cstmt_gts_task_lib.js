@@ -3,35 +3,16 @@
  *
  * Teamwork task: N/A
  *
- * Server-only library that hands Generate Statement off to the background
- * gts_mr.js Map/Reduce job instead of rendering the merged PDF inline in
- * the Suitelet. The PDF still needs to open in the SAME new browser tab
- * Generate Statement opened - since a Map/Reduce job has no live HTTP
- * connection to push its result back through, that tab instead opens
- * showing a progress page (buildConfirmationForm) whose own script polls
- * the new STATUS_CHECK action every few seconds - driving a visual
- * progress bar off gts_mr.js's own N/task.checkStatus() - until it reports
- * a temp file id (or an error), then navigates that same tab to the new
- * DOWNLOAD_PDF action (see gts_sl.js), which streams that file and
- * deletes it immediately after.
+ * Server-only library that queues statement generation and emailing as
+ * background Map/Reduce jobs instead of running them inline in the
+ * Suitelet. Builds the progress page that polls job status and shows a
+ * progress bar until the job finishes, then opens the generated PDF or
+ * shows a send summary in the same browser tab.
  *
  * Date                 Author              Purpose
- * 04-September-2026    Jared Espineli      Initial Release - queues gts_mr.js and shows a progress page with a
- *                                          real bar (fed by task.checkStatus()'s per-stage percentage) that
- *                                          polls until a temp file id (or error) appears in N/cache, then
- *                                          navigates to the DOWNLOAD_PDF action; generates its own RUN_ID (a
- *                                          Map/Reduce job has no API to read its own real task id) and passes
- *                                          it into gts_mr.js as a script parameter to use as the cache key,
- *                                          while the real task id from submit() is kept separately for
- *                                          task.checkStatus() progress polling - a COMPLETE task with nothing
- *                                          in the cache now surfaces a clear error (pointing at a likely-missing
- *                                          RUN_ID deployment Parameter) instead of polling forever.
- * 07-September-2026    Jared Espineli      Added Email Statement - submitEmailStatementTask (queues
- *                                          gts_email_mr.js, resolving the sender employee ONCE via
- *                                          gts_email_lib.js rather than per customer) and
- *                                          buildEmailConfirmationForm, factoring the progress page itself onto
- *                                          a shared buildProgressPage so the two flows' near-identical bar/poll
- *                                          markup isn't duplicated.
+ * 04-September-2026    Jared Espineli      Initial Release - queues gts_mr.js and shows a progress page that polls for a result before opening the generated PDF.
+ * 07-September-2026    Jared Espineli      Added Email Statement - queues gts_email_mr.js and shows a progress page reusing the shared progress-page markup.
+ * 08-September-2026    Jared Espineli      Added a warning that refreshing the tab after the PDF opens returns to Customer Search, shown via a new HTML viewer page instead of streaming the PDF directly.
  *
  * Copyright (c) 2026 BlueBridge One Business Solutions, All Rights Reserved
  * support@bluebridgeone.com, UK Support: +44 (0)1932 300007 SA Support: +27 (0)10 500 8674
@@ -55,14 +36,11 @@ define(['N/task', 'N/runtime', 'N/url', 'N/cache', 'N/ui/serverWidget', 'N/log',
 
         const _FIELDS = helperLib._FIELDS;
 
-        // Poll cadence for the progress page's own script. POLL_MAX_ATTEMPTS * POLL_INTERVAL_MS is how long the
-        // page keeps polling before giving up (~10 minutes) - the background job itself isn't stopped by this.
+        // How often (and how long, ~10 minutes total) the progress page polls before giving up.
         const POLL_INTERVAL_MS = 4000;
         const POLL_MAX_ATTEMPTS = 150;
 
-        // Rough overall-progress ranges per Map/Reduce stage, turning task.checkStatus()'s per-stage
-        // getPercentageCompleted() into one number the bar can show. MAP gets the majority of the range since
-        // that's where the real per-customer query work happens.
+        // Overall-progress percentage range for each Map/Reduce stage, used to drive the progress bar.
         const STAGE_RANGES = {
             [task.MapReduceStage.GET_INPUT_DATA]: [0, 5],
             [task.MapReduceStage.MAP]: [5, 90],
@@ -72,14 +50,10 @@ define(['N/task', 'N/runtime', 'N/url', 'N/cache', 'N/ui/serverWidget', 'N/log',
 
         const LIB_FX = {};
 
-        // A run id generated BEFORE submission, so it can be handed to gts_mr.js as a script parameter - the
-        // real NetSuite task id isn't known until submit() returns, too late to pass into the job it identifies.
-        // Not a security token, just needs to be unique enough for a status-cache key/temp filename.
+        // Generates a unique run id used as the status-cache key/temp filename.
         const generateRunId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 
-        // Queues gts_mr.js with this request's marked customer ids/date filters. Returns the self-generated
-        // run id (the N/cache key gts_mr.js writes its result under), the real task id (for task.checkStatus()
-        // progress polling), and customer count (for the initial message).
+        // Queues gts_mr.js for the marked customers/date filters. Returns the run id, task id, and customer count.
         LIB_FX.submitGenerateStatementTask = (params) => {
             const customerIds = helperLib.LIB_FX.parseIdListParam(params && params[_FIELDS.ACTION.CUSTOMER_IDS]);
             const runId = generateRunId();
@@ -87,14 +61,13 @@ define(['N/task', 'N/runtime', 'N/url', 'N/cache', 'N/ui/serverWidget', 'N/log',
             const mrTask = task.create({
                 taskType: task.TaskType.MAP_REDUCE,
                 scriptId: _FIELDS.MR.SCRIPT_ID,
-                // Coerced to String() throughout - the only type a script parameter value is guaranteed to
-                // round-trip as.
+                // Script parameter values must be strings.
                 params: {
                     [_FIELDS.MR.PARAM.RUN_ID]: runId,
                     [_FIELDS.MR.PARAM.CUSTOMER_IDS]: customerIds.join(','),
                     [_FIELDS.MR.PARAM.START_DATE]: String((params && params[_FIELDS.FORM.START_DATE]) || ''),
                     [_FIELDS.MR.PARAM.STATEMENT_DATE]: String((params && params[_FIELDS.FORM.STATEMENT_DATE]) || ''),
-                    // Mirrors buildPdf's own rollup default - only 'F' turns it off
+                    // Rollup defaults on - only 'F' turns it off.
                     [_FIELDS.MR.PARAM.ROLLUP]: (params && params[_FIELDS.FORM.ROLL_PRIOR_CHARGES]) === 'F' ? 'F' : 'T'
                 }
             });
@@ -105,11 +78,7 @@ define(['N/task', 'N/runtime', 'N/url', 'N/cache', 'N/ui/serverWidget', 'N/log',
             return {runId, nsTaskId, customerCount: customerIds.length};
         }
 
-        // Queues gts_email_mr.js with this request's marked customer ids/date filters, same shape as
-        // submitGenerateStatementTask above. The sender employee is resolved to an internal id HERE, once per
-        // submission (not once per customer in the map stage) via gts_email_lib.js's resolveAuthorId, and
-        // passed in as a script parameter - a blank result there just means every customer's send fails with a
-        // clear reason (see gts_email_mr.js's map), rather than blocking submission outright.
+        // Queues gts_email_mr.js for the marked customers/date filters. Resolves the sender employee once here.
         LIB_FX.submitEmailStatementTask = (params) => {
             const customerIds = helperLib.LIB_FX.parseIdListParam(params && params[_FIELDS.ACTION.CUSTOMER_IDS]);
             const runId = generateRunId();
@@ -134,8 +103,7 @@ define(['N/task', 'N/runtime', 'N/url', 'N/cache', 'N/ui/serverWidget', 'N/log',
             return {runId, nsTaskId, customerCount: customerIds.length};
         }
 
-        // This same Suitelet's DOWNLOAD_PDF action, carrying the temp file's id - streamed then deleted by
-        // gts_sl.js, never a lasting URL.
+        // Builds the URL to this Suitelet's DOWNLOAD_PDF action for the given temp file id.
         const buildDownloadUrl = (fileId) => {
             const currentScript = runtime.getCurrentScript();
 
@@ -157,8 +125,7 @@ define(['N/task', 'N/runtime', 'N/url', 'N/cache', 'N/ui/serverWidget', 'N/log',
             return Math.round(range[0] + (stagePercent / 100) * (range[1] - range[0]));
         }
 
-        // This same Suitelet's STATUS_CHECK action, carrying both ids - runId (the N/cache key) and nsTaskId
-        // (for task.checkStatus() progress) - what the progress page polls.
+        // Builds the URL to this Suitelet's STATUS_CHECK action, the URL the progress page polls.
         const buildStatusCheckUrl = (runId, nsTaskId) => {
             const currentScript = runtime.getCurrentScript();
 
@@ -173,9 +140,7 @@ define(['N/task', 'N/runtime', 'N/url', 'N/cache', 'N/ui/serverWidget', 'N/log',
             });
         }
 
-        // Checks whether the queued run has a result yet. Checks N/cache first, by runId (the definitive
-        // result, written by gts_mr.js's summarize) and only falls back to task.checkStatus() by nsTaskId - for
-        // progress percent, and to catch a run that failed before summarize ever wrote anything.
+        // Checks whether the queued run has a result yet, checking the cache first, then task status.
         LIB_FX.checkGenerateStatementStatus = (runId, nsTaskId) => {
             if (!runId) {
                 return {ready: true, error: 'Missing run id.'};
@@ -206,10 +171,7 @@ define(['N/task', 'N/runtime', 'N/url', 'N/cache', 'N/ui/serverWidget', 'N/log',
                     return {ready: true, error: 'Statement generation failed - check the script execution log.'};
                 }
 
-                // The job finished but the cache lookup above found nothing - normally impossible (gts_mr.js
-                // writes the cache entry as its very last step), so this means MR.PARAM.RUN_ID isn't registered
-                // on the deployment (getParameter() came back blank there, so writeStatus had no key to write
-                // under). Surfaced here instead of leaving the page polling forever.
+                // The job finished but nothing was found in the cache - likely a missing RUN_ID deployment parameter.
                 if (status.status === task.TaskStatus.COMPLETE) {
                     return {
                         ready: true,
@@ -225,8 +187,7 @@ define(['N/task', 'N/runtime', 'N/url', 'N/cache', 'N/ui/serverWidget', 'N/log',
             }
         }
 
-        // Styling shared by every progress page below - extracted so buildProgressPage doesn't repeat it once
-        // per caller.
+        // CSS shared by every progress page below.
         const PROGRESS_STYLES = `
             <style>
                 .bb1-cstmt-progress-wrap { max-width: 480px; font-size: 12px; }
@@ -240,13 +201,7 @@ define(['N/task', 'N/runtime', 'N/url', 'N/cache', 'N/ui/serverWidget', 'N/log',
             </style>
         `;
 
-        // A progress page shown while a background Map/Reduce job runs - its own plain <script> polls
-        // config.statusCheckUrl every POLL_INTERVAL_MS, updating the bar, until a response carries an error or
-        // ready:true. config.readyHandlerJs is inlined as the body of a function(data) called once ready:true
-        // arrives (barEl/statusEl/setPercent/showError are all in scope for it to use) - Generate Statement
-        // redirects to the finished PDF there, Email Statement shows a send summary instead. Shared here since
-        // both flows are otherwise near-identical bar/poll markup - see buildConfirmationForm/
-        // buildEmailConfirmationForm below.
+        // Builds a progress page that polls for job status and updates the bar until done, then runs config.readyHandlerJs.
         const buildProgressPage = (config) => {
             const form = serverWidget.createForm({title: config.title});
 
@@ -333,7 +288,8 @@ define(['N/task', 'N/runtime', 'N/url', 'N/cache', 'N/ui/serverWidget', 'N/log',
             statusCheckUrl: buildStatusCheckUrl(submission.runId, submission.nsTaskId),
             introHtml: `<p>Generating the statement for ${submission.customerCount} customer(s) - this runs in the
                 background and may take a few minutes for a large selection. This tab will open the PDF
-                automatically once it's ready - please keep it open.</p>`,
+                automatically once it's ready - please keep it open. Refreshing this tab after the PDF opens
+                will return you to Customer Search.</p>`,
             readyHandlerJs: `
                 setPercent(100);
                 if (data.downloadUrl) {
@@ -345,8 +301,7 @@ define(['N/task', 'N/runtime', 'N/url', 'N/cache', 'N/ui/serverWidget', 'N/log',
             `
         });
 
-        // Email Statement's progress page - once ready, shows the send summary (sent/skipped/failed) written
-        // by gts_email_mr.js's summarize instead of navigating anywhere, since nothing is streamed back.
+        // Email Statement's progress page - once ready, shows the send summary (sent/skipped/failed).
         LIB_FX.buildEmailConfirmationForm = (submission) => buildProgressPage({
             title: 'Email Statement',
             fieldId: 'custpage_qpg_cstmt_gts_email_confirm',
@@ -367,6 +322,29 @@ define(['N/task', 'N/runtime', 'N/url', 'N/cache', 'N/ui/serverWidget', 'N/log',
                 statusEl.textContent = 'Done.';
             `
         });
+
+        // Escapes HTML entities in the PDF's file name.
+        const escapeHtml = (value) => String(value || '')
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+        // Builds an HTML page that embeds the PDF (as a base64 data URI) and warns that refreshing it returns to Customer Search.
+        LIB_FX.buildPdfViewerPage = (fileName, base64Contents) => `
+            <!doctype html>
+            <html>
+            <head>
+                <meta charset="utf-8">
+                <title>${escapeHtml(fileName)}</title>
+                <style>html, body { margin: 0; height: 100%; }</style>
+            </head>
+            <body>
+                <script>
+                    window.alert('Refreshing this page will return you to Customer Search.');
+                </script>
+                <embed src="data:application/pdf;base64,${base64Contents}" type="application/pdf"
+                       style="width: 100%; height: 100vh; border: none;" />
+            </body>
+            </html>
+        `;
 
         return {LIB_FX};
     });
