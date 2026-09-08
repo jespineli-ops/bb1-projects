@@ -13,6 +13,7 @@
  * 04-September-2026    Jared Espineli      Initial Release - queues gts_mr.js and shows a progress page that polls for a result before opening the generated PDF.
  * 07-September-2026    Jared Espineli      Added Email Statement - queues gts_email_mr.js and shows a progress page reusing the shared progress-page markup.
  * 08-September-2026    Jared Espineli      Added a warning that refreshing the tab after the PDF opens returns to Customer Search, shown via a new HTML viewer page instead of streaming the PDF directly.
+ * 08-September-2026    Jared Espineli      Removed the AUTHOR_ID script parameter - sender is now resolved per customer in gts_email_mr.js instead.
  *
  * Copyright (c) 2026 BlueBridge One Business Solutions, All Rights Reserved
  * support@bluebridgeone.com, UK Support: +44 (0)1932 300007 SA Support: +27 (0)10 500 8674
@@ -20,8 +21,7 @@
  * @NApiVersion 2.1
  * @NModuleScope SameAccount
  */
-define(['N/task', 'N/runtime', 'N/url', 'N/cache', 'N/ui/serverWidget', 'N/log', './bb1_qpg_cstmt_gts_lib_helper',
-        './bb1_qpg_cstmt_gts_email_lib'],
+define(['N/task', 'N/runtime', 'N/url', 'N/cache', 'N/ui/serverWidget', 'N/log', './bb1_qpg_cstmt_gts_lib_helper'],
     /**
      * @param{task} task
      * @param{runtime} runtime
@@ -30,9 +30,8 @@ define(['N/task', 'N/runtime', 'N/url', 'N/cache', 'N/ui/serverWidget', 'N/log',
      * @param{serverWidget} serverWidget
      * @param{log} log
      * @param{helperLib} helperLib
-     * @param{emailLib} emailLib
      */
-    (task, runtime, url, cache, serverWidget, log, helperLib, emailLib) => {
+    (task, runtime, url, cache, serverWidget, log, helperLib) => {
 
         const _FIELDS = helperLib._FIELDS;
 
@@ -78,11 +77,11 @@ define(['N/task', 'N/runtime', 'N/url', 'N/cache', 'N/ui/serverWidget', 'N/log',
             return {runId, nsTaskId, customerCount: customerIds.length};
         }
 
-        // Queues gts_email_mr.js for the marked customers/date filters. Resolves the sender employee once here.
+        // Queues gts_email_mr.js for the marked customers/date filters. The sender employee is resolved per
+        // customer in gts_email_mr.js's map stage (from the customer's subsidiary), not here.
         LIB_FX.submitEmailStatementTask = (params) => {
             const customerIds = helperLib.LIB_FX.parseIdListParam(params && params[_FIELDS.ACTION.CUSTOMER_IDS]);
             const runId = generateRunId();
-            const authorId = emailLib.LIB_FX.resolveAuthorId();
 
             const mrTask = task.create({
                 taskType: task.TaskType.MAP_REDUCE,
@@ -92,8 +91,7 @@ define(['N/task', 'N/runtime', 'N/url', 'N/cache', 'N/ui/serverWidget', 'N/log',
                     [_FIELDS.EMAIL_MR.PARAM.CUSTOMER_IDS]: customerIds.join(','),
                     [_FIELDS.EMAIL_MR.PARAM.START_DATE]: String((params && params[_FIELDS.FORM.START_DATE]) || ''),
                     [_FIELDS.EMAIL_MR.PARAM.STATEMENT_DATE]: String((params && params[_FIELDS.FORM.STATEMENT_DATE]) || ''),
-                    [_FIELDS.EMAIL_MR.PARAM.ROLLUP]: (params && params[_FIELDS.FORM.ROLL_PRIOR_CHARGES]) === 'F' ? 'F' : 'T',
-                    [_FIELDS.EMAIL_MR.PARAM.AUTHOR_ID]: String(authorId || '')
+                    [_FIELDS.EMAIL_MR.PARAM.ROLLUP]: (params && params[_FIELDS.FORM.ROLL_PRIOR_CHARGES]) === 'F' ? 'F' : 'T'
                 }
             });
 
@@ -314,7 +312,7 @@ define(['N/task', 'N/runtime', 'N/url', 'N/cache', 'N/ui/serverWidget', 'N/log',
                 if (data.summary) {
                     var s = data.summary;
                     var parts = [s.sent + ' sent'];
-                    if (s.skipped) parts.push(s.skipped + ' skipped (no email on file)');
+                    if (s.skipped) parts.push(s.skipped + ' skipped (no recipient email or statement author on file)');
                     if (s.failed) parts.push(s.failed + ' failed');
                     statusEl.textContent = 'Done - ' + parts.join(', ') + '.';
                     return;

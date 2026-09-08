@@ -25,6 +25,7 @@
  * 07-September-2026    Jared Espineli      Replaced Previous/Next with a page-range SELECT dropdown above the
  *                                          sublist (serverWidget.Sublist has no native dropdown toolbar control),
  *                                          and raised PAGE_SIZE to 15.
+ * 08-September-2026    Jared Espineli      Fixed the last page crashing on Customer/ID - setSublistValue() rejects a literal '' as if the value argument were missing, and a one-to-many join on the Customer List search was leaving some rows with a blank altname. Guarded reads (safeRead()) and replaced every '' fallback in this sublist with a single-space BLANK constant.
  *
  * Copyright (c) 2026 BlueBridge One Business Solutions, All Rights Reserved
  * support@bluebridgeone.com, UK Support: +44 (0)1932 300007 SA Support: +27 (0)10 500 8674
@@ -167,6 +168,24 @@ define(['N/search', 'N/runtime', 'N/log', 'N/ui/serverWidget', './bb1_qpg_cstmt_
             pageSelectField.defaultValue = String(pageIndex);
         }
 
+        // Sublist.setSublistValue() throws SSS_MISSING_REQD_ARGUMENT on a literal '' - its internal check
+        // appears to be `if (!value)` rather than `if (value === undefined)`, so an empty string is rejected
+        // the same as a missing one. A single space renders as blank but is truthy, so it's the safe fallback
+        // for every setSublistValue call below - never pass '' as value.
+        const BLANK = ' ';
+
+        // Reads one column off a search result, returning BLANK instead of throwing/crashing the whole page -
+        // a one-to-many join on this search (e.g. a Multi-Subsidiary Customer join) can leave a result row
+        // unable to resolve a column, especially at a page boundary.
+        const safeRead = (result, method, fieldName) => {
+            try {
+                return result[method]({name: fieldName}) || BLANK;
+            } catch (e) {
+                log.error(`Customer List row read failed for result id ${result && result.id}`, `${fieldName}: ${e.message}`);
+                return BLANK;
+            }
+        }
+
         // Adds the Customer List sublist (one page's worth of rows, per helperLib.LIB_FX.PAGE_SIZE) below the fields
         const addResultsSublist = (form, filters, params) => {
             const loadedSearch = loadCustomerListSearch(filters);
@@ -219,11 +238,15 @@ define(['N/search', 'N/runtime', 'N/log', 'N/ui/serverWidget', './bb1_qpg_cstmt_
                 // Restores a mark made on an earlier visit to THIS page.
                 const wasMarked = selectedIds.indexOf(String(result.id)) !== -1;
                 sublist.setSublistValue({id: _FIELDS.RESULTS.SELECT, line: line, value: wasMarked ? 'T' : 'F'});
-                sublist.setSublistValue({id: _FIELDS.RESULTS.ID, line: line, value: result.id || ''});
-                sublist.setSublistValue({id: _FIELDS.RESULTS.CUSTOMER, line: line, value: result.getValue({name: 'altname'}) || ''});
-                sublist.setSublistValue({id: _FIELDS.RESULTS.SUBSIDIARY, line: line, value: result.getText({name: 'subsidiary'}) || ''});
-                sublist.setSublistValue({id: _FIELDS.RESULTS.CURRENCY, line: line, value: result.getText({name: 'currency'}) || ''});
-                sublist.setSublistValue({id: _FIELDS.RESULTS.BALANCE, line: line, value: result.getValue({name: 'balance'}) || ''});
+                sublist.setSublistValue({id: _FIELDS.RESULTS.ID, line: line, value: result.id || BLANK});
+
+                // Guarded individually - a one-to-many join on this search (e.g. a Multi-Subsidiary Customer
+                // join) can leave a stray result row unable to resolve a column, especially at a page boundary.
+                // One bad row shouldn't blank out the whole page, so a failed read just renders blank for that cell.
+                sublist.setSublistValue({id: _FIELDS.RESULTS.CUSTOMER, line: line, value: safeRead(result, 'getValue', 'altname')});
+                sublist.setSublistValue({id: _FIELDS.RESULTS.SUBSIDIARY, line: line, value: safeRead(result, 'getText', 'subsidiary')});
+                sublist.setSublistValue({id: _FIELDS.RESULTS.CURRENCY, line: line, value: safeRead(result, 'getText', 'currency')});
+                sublist.setSublistValue({id: _FIELDS.RESULTS.BALANCE, line: line, value: safeRead(result, 'getValue', 'balance')});
             });
 
             // Carries forward every marked id that does NOT belong to this page - this page's own ids are

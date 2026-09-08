@@ -14,6 +14,7 @@
  * 04-September-2026    Jared Espineli      Fixed address/entity field lookups, added the rest of the statement (activity table, totals, aging), and split PDF generation to run per customer in the background.
  * 07-September-2026    Jared Espineli      Folded gts_data_lib.js into this file and extracted buildCustomerStatement so all statement data and rendering logic live in one library.
  * 08-September-2026    Jared Espineli      Bolded key totals/headers, added a Payment Reference line and a clickable Peach Payments logo, and fixed related rendering bugs.
+ * 08-September-2026    Jared Espineli      Sourced statement author/queries email/whatsapp from the customer's subsidiary, and added getDefaultPeriodDates() (Statement Date 20th of the month, Start Date 2 months prior) for the Email Statement job's Scheduled deployment.
  *
  * Copyright (c) 2026 BlueBridge One Business Solutions, All Rights Reserved
  * support@bluebridgeone.com, UK Support: +44 (0)1932 300007 SA Support: +27 (0)10 500 8674
@@ -210,10 +211,17 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/file', 'N/url', 'N/log'
 
             log.debug('Header row count', results.length);
 
-            // No invoice in the period still produces a valid statement, just without the invoice-sourced detail.
+            // No invoice in the period still produces a valid statement, just without the invoice-sourced detail -
+            // resolve the customer/subsidiary fields anyway so the sender/queries panel still populate.
             if (!results.length) {
                 log.debug('No invoice in period for header', `customer ${customerId}`);
-                return {customer_name: '', entity_name: '', currency_symbol: 'R'};
+                const entityFields = getEntityFields(customerId, null);
+                return {
+                    customer_name: '', entity_name: '', currency_symbol: 'R',
+                    statement_author_id: entityFields.statement_author_id,
+                    queries_email: entityFields.queries_email,
+                    queries_whatsapp: entityFields.queries_whatsapp
+                };
             }
 
             const headerRow = results[0];
@@ -229,6 +237,9 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/file', 'N/url', 'N/log'
             headerRow.payment_url = entityFields.payment_url;
             headerRow.payment_image_url = entityFields.payment_image_url;
             headerRow.customer_entity_id = entityFields.customer_entity_id;
+            headerRow.statement_author_id = entityFields.statement_author_id;
+            headerRow.queries_email = entityFields.queries_email;
+            headerRow.queries_whatsapp = entityFields.queries_whatsapp;
             headerRow.bill_address = getBillingAddress(customerId);
 
             return headerRow;
@@ -299,7 +310,12 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/file', 'N/url', 'N/log'
                 payment_image_url: '',
                 // Customer's own Entity ID (NetSuite's customer-facing number, e.g. "C000123") - printed as the
                 // statement's Payment Reference so a tenant's bank transfer can be matched back to their account.
-                customer_entity_id: ''
+                customer_entity_id: '',
+                // Subsidiary-level Customer Statement Author/Queries fields - left blank when not configured on
+                // the subsidiary, rather than falling back to a hardcoded value (see gts_email_mr.js/QUERIES panel).
+                statement_author_id: '',
+                queries_email: '',
+                queries_whatsapp: ''
             };
 
             let subsidiaryId = subsidiaryFromInvoice || null;
@@ -351,10 +367,14 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/file', 'N/url', 'N/log'
             try {
                 const sql =
                     'SELECT ' +
-                    '    s.federalidnumber                     AS entity_vat_no, ' +
-                    '    s.custrecord_bb1_peach_payment_url     AS payment_url, ' +
+                    '    s.federalidnumber                       AS entity_vat_no, ' +
+                    '    s.custrecord_bb1_peach_payment_url       AS payment_url, ' +
                     // A List/Record(File) field - SuiteQL returns the File Cabinet internal id, not a URL.
-                    '    s.custrecord_bb1_peach_payment_image   AS payment_image_id ' +
+                    '    s.custrecord_bb1_peach_payment_image     AS payment_image_id, ' +
+                    // Employee this subsidiary's statement emails are sent as (List/Record(Employee) field).
+                    '    s.custrecord_bb1_cust_statement_author   AS statement_author_id, ' +
+                    '    s.custrecord_bb1_queries_email           AS queries_email, ' +
+                    '    s.custrecord_bb1_queries_whatsapp        AS queries_whatsapp ' +
                     'FROM subsidiary s ' +
                     `WHERE s.id = ${assertId(subsidiaryId)}`;
 
@@ -365,6 +385,9 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/file', 'N/url', 'N/log'
                     values.payment_url = values.payment_url || rows[0].payment_url || '';
                     values.payment_image_url = values.payment_image_url ||
                         resolvePeachPaymentImageUrl(rows[0].payment_image_id);
+                    values.statement_author_id = rows[0].statement_author_id || '';
+                    values.queries_email = rows[0].queries_email || '';
+                    values.queries_whatsapp = rows[0].queries_whatsapp || '';
                 }
 
             } catch (e) {
@@ -608,6 +631,21 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/file', 'N/url', 'N/log'
             };
         }
 
+        // Default Start Date/Statement Date for a run with no explicit dates - the Email Statement job's
+        // Scheduled deployment, which fires on the 20th of each month (see gts_email_mr.js). Statement Date is
+        // the 20th of the current month, Start Date the first day of the month two months before - e.g. a run
+        // on 20 September produces Start=1 July/Statement=20 September, which resolvePeriod() above then bills
+        // one month ahead, as October.
+        LIB_FX.getDefaultPeriodDates = () => {
+            const today = new Date();
+            const currentYearMonth = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
+
+            return {
+                startDate: `${addMonths(currentYearMonth, -2)}-01`,
+                statementDate: `${currentYearMonth}-20`
+            };
+        }
+
         //-----------------------------------------------
         //Public entry point - header only, for a lighter preview than the full statement
         //-----------------------------------------------
@@ -734,10 +772,6 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/file', 'N/url', 'N/log'
         // Peach Payments logo size in points, shown below the Whatsapp line.
         const PEACH_LOGO_WIDTH_PT = 48;
         const PEACH_LOGO_HEIGHT_PT = 48;
-
-        // Queries panel shown bottom-left of the statement, next to the aging strip.
-        const QUERIES_EMAIL = 'commercial@qholdings.co.za';
-        const QUERIES_WHATSAPP = '082 400 3693';
 
         //-----------------------------------------------
         //Formatting helpers
@@ -940,15 +974,16 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/file', 'N/url', 'N/log'
         }
 
         //-----------------------------------------------
-        //Queries + aging strip
+        //Queries + aging strip - email/Whatsapp sourced from the customer's subsidiary
+        //(custrecord_bb1_queries_email/custrecord_bb1_queries_whatsapp), left blank if not configured
         //-----------------------------------------------
         const buildQueriesAgingSection = (statement) => `
             <table class="cstmt-plain" style="width: 100%; margin-top: 8pt;">
                 <tr>
                     <td style="width: 55%; vertical-align: top; border: none;">
                         <p class="cstmt-queries">Queries</p>
-                        <p>${escapeXml(QUERIES_EMAIL)}</p>
-                        <p>Whatsapp Nr: ${escapeXml(QUERIES_WHATSAPP)}</p>
+                        <p>${escapeXml(statement.header.queries_email)}</p>
+                        <p>Whatsapp Nr: ${escapeXml(statement.header.queries_whatsapp)}</p>
                         ${statement.header.payment_image_url && statement.header.payment_url
                             // BFO's <a> wraps text runs reliably, but rarely creates a link annotation over a
                             // replaced element (an <img>, with no text of its own) - href goes on the <img>

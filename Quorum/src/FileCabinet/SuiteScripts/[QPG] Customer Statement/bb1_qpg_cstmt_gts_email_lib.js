@@ -3,12 +3,15 @@
  *
  * Teamwork task: N/A
  *
- * Server-only library backing the Email Statement flow - resolves the sender,
- * reads each customer's statement recipient/cc addresses, and builds/sends
- * the statement email. Used by gts_task_lib.js and gts_email_mr.js.
+ * Server-only library backing the Email Statement flow - reads each
+ * customer's statement recipient/cc addresses and builds/sends the statement
+ * email. Used by gts_email_mr.js. The sender (author) is resolved per
+ * customer in gts_pdf_lib.js from the customer's subsidiary
+ * (custrecord_bb1_cust_statement_author), not by this library.
  *
  * Date                 Author              Purpose
  * 07-September-2026    Jared Espineli      Initial Release - sends statement emails using a static employee id as the sender.
+ * 08-September-2026    Jared Espineli      Removed the static sender - author is now resolved per customer from the subsidiary record.
  *
  * Copyright (c) 2026 BlueBridge One Business Solutions, All Rights Reserved
  * support@bluebridgeone.com, UK Support: +44 (0)1932 300007 SA Support: +27 (0)10 500 8674
@@ -24,9 +27,6 @@ define(['N/search', 'N/email', 'N/log'],
      */
     (search, email, log) => {
 
-        // Internal id of the employee statement emails are sent as.
-        const AUTHOR_EMPLOYEE_ID = 184;
-
         // Free-form, comma-separated address fields on the Customer record.
         const CUSTOMER_FIELD = {
             EMAIL:    'custentity_bb1_statement_email',
@@ -34,8 +34,6 @@ define(['N/search', 'N/email', 'N/log'],
         };
 
         const LIB_FX = {};
-
-        LIB_FX.AUTHOR_EMPLOYEE_ID = AUTHOR_EMPLOYEE_ID;
 
         //-----------------------------------------------
         //Address parsing - both custentity fields are
@@ -59,14 +57,6 @@ define(['N/search', 'N/email', 'N/log'],
 
             return addresses;
         }
-
-        //-----------------------------------------------
-        //Sender - resolved ONCE per run (see
-        //gts_task_lib.js), not once per customer
-        //-----------------------------------------------
-
-        // Returns the sender's employee id.
-        LIB_FX.resolveAuthorId = () => AUTHOR_EMPLOYEE_ID;
 
         //-----------------------------------------------
         //Per-customer recipient/cc addresses

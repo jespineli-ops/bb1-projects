@@ -18,6 +18,9 @@
  *                                          Statement action with its own background job.
  * 08-September-2026    Jared Espineli      Exposed the Back to Search script/deployment ids so other scripts can
  *                                          redirect there server-side.
+ * 08-September-2026    Jared Espineli      Removed the Email Statement job's AUTHOR_ID parameter (sender now
+ *                                          resolved per customer) and noted its Scheduled deployment reads
+ *                                          SCRIPT_PARAM.CUSTOMER_LIST_SEARCH directly as a Company Preference.
  *
  * Copyright (c) 2026 BlueBridge One Business Solutions, All Rights Reserved
  * support@bluebridgeone.com, UK Support: +44 (0)1932 300007 SA Support: +27 (0)10 500 8674
@@ -111,7 +114,12 @@ define(['N/url'],
                 STATUS_CACHE_NAME: 'bb1_qpg_cstmt_gts_status'
             },
             // The Email Statement Map/Reduce job's script id and parameters. Deployment note: created manually
-            // in the NetSuite UI, not tracked by this project's SDF source.
+            // in the NetSuite UI, not tracked by this project's SDF source. Has two deployments - an on-demand
+            // one (task.create()'d from the Suitelet, CUSTOMER_IDS/RUN_ID set per run) and a Scheduled one,
+            // customdeploy_bb1_qpg_cstmt_gts_email_mrs (fires on its own recurrence, on the 20th of each month,
+            // with CUSTOMER_IDS/RUN_ID/dates left blank - see gts_email_mr.js). The Scheduled deployment sources
+            // its customer list from SCRIPT_PARAM.CUSTOMER_LIST_SEARCH above, not a parameter of its own - that
+            // field is a Company Preference, so any script can read it.
             EMAIL_MR: {
                 SCRIPT_ID: 'customscript_bb1_qpg_cstmt_gts_email_mr',
                 PARAM: {
@@ -119,9 +127,7 @@ define(['N/url'],
                     START_DATE:     'custscript_bb1_qpg_cstmt_eml_start_date',
                     STATEMENT_DATE: 'custscript_bb1_qpg_cstmt_eml_stmnt_date',
                     ROLLUP:         'custscript_bb1_qpg_cstmt_eml_rollup',
-                    RUN_ID:         'custscript_bb1_qpg_cstmt_eml_run_id',
-                    // Internal id of the employee the statement emails are sent as.
-                    AUTHOR_ID:      'custscript_bb1_qpg_cstmt_eml_author_id'
+                    RUN_ID:         'custscript_bb1_qpg_cstmt_eml_run_id'
                 }
             }
         }
