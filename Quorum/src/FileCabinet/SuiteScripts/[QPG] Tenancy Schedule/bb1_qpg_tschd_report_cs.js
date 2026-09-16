@@ -9,9 +9,7 @@
  * Date        	  Author		        Purpose
  * 08/19/2026     Jared Espineli        Initial Version
  * 08/24/2026     Jared Espineli        Added Export CSV button handling
- * 08/28/2026     Jared Espineli        Print PDF/Export CSV now alert and stop if a required field (As of Date) is blank
- * 08/28/2026     Jared Espineli        Swapped N/ui/dialogs for window.alert - N/ui/dialogs isn't available on
- *                                      Suitelet-rendered pages (only on standard record forms) and failed to load
+ * 08/28/2026     Jared Espineli        Print PDF/Export CSV now alert and stop via window.alert when a required field like As of Date is blank.
  *
  * Copyright (c) 2022 BlueBridge One Business Solutions, All Rights Reserved [Replace appropriately]
  * support@bluebridgeone.com, +44 (0)1932 300007
@@ -25,8 +23,7 @@ define(['N/currentRecord', './bb1_qpg_tschd_report_lib_helper'],
 
         const _FIELDS = helperLib._FIELDS;
 
-        // Alerts and returns true when a required field is blank, so callers can
-        // bail out before generating the report. Returns false when all good.
+        // Alerts and returns true if a required field is missing, otherwise false.
         const blockOnMissingRequiredFields = (currentRecord) => {
             const missingLabels = helperLib.LIB_FX.getMissingRequiredFields(currentRecord);
 

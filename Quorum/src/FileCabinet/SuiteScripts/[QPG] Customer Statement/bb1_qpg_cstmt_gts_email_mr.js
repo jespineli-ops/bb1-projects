@@ -19,6 +19,7 @@
  * Date                 Author              Purpose
  * 07-September-2026    Jared Espineli      Initial Release - emails each marked customer their own statement PDF and reports a send summary for the progress page.
  * 08-September-2026    Jared Espineli      Added the Scheduled-deployment path (customer list/dates fallback, per-customer sender from subsidiary, optional RUN_ID) and logs deploymentId for traceability.
+ * 16-September-2026    Jared Espineli      Subject/body now come from the customer's subsidiary Email Template when configured (gts_email_lib.js's mergeEmailTemplate()), falling back to the fixed wording otherwise. The PDF attachment is unaffected either way.
  *
  * Copyright (c) 2026 BlueBridge One Business Solutions, All Rights Reserved
  * support@bluebridgeone.com, UK Support: +44 (0)1932 300007 SA Support: +27 (0)10 500 8674
@@ -172,12 +173,18 @@ define(['N/runtime', 'N/cache', 'N/search', 'N/log', './bb1_qpg_cstmt_gts_pdf_li
                 const pdfFile = pdfLib.LIB_FX.wrapPagesAsPdf([pageXml]);
                 pdfFile.name = `Statement - ${customerName} - ${statement.billingMonth}.pdf`;
 
+                // Subsidiary's Email Template (custrecord_bb1_cus_state_email_template), when configured,
+                // supplies the subject/body - falls back to the fixed wording otherwise. Either way the PDF
+                // is still attached below by sendStatementEmail.
+                const templateEmail = emailLib.LIB_FX.mergeEmailTemplate(
+                    statement.header.email_template_id, customerId, statement.header.transaction_id);
+
                 emailLib.LIB_FX.sendStatementEmail({
                     authorId, customerId,
                     to: emailFields.to,
                     cc: emailFields.cc,
-                    subject: emailLib.LIB_FX.buildSubject(statement.billingMonth),
-                    body: emailLib.LIB_FX.buildBody(customerName, statement.billingMonth),
+                    subject: templateEmail ? templateEmail.subject : emailLib.LIB_FX.buildSubject(statement.billingMonth),
+                    body: templateEmail ? templateEmail.body : emailLib.LIB_FX.buildBody(customerName, statement.billingMonth),
                     pdfFile
                 });
 

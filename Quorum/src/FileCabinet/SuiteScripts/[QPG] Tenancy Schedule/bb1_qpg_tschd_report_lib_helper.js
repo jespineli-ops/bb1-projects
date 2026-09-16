@@ -3,23 +3,16 @@
  * @NModuleScope SameAccount
  *
  * Project: Quorum Tenancy Schedule - P102843 Quorum NetSuite Implementation
- * Shared library (field ids + cascading filter helpers) used by both the
+ * Shared library of field ids and cascading filter helpers used by the
  * Suitelet and its client script.
  *
  * Date        	  Author		        Purpose
  * 08/20/2026     Jared Espineli        Initial Version
- * 08/24/2026     Jared Espineli        Added Export CSV action
- * 08/27/2026     Jared Espineli        Added getFiltersFromParams() to turn the Suitelet's request params into the data lib's filter lists
- * 08/28/2026     Jared Espineli        Fixed As of Date shifting by a day on the report: buildReportUrl now sends DATE
- *                                      fields' local Y/M/D as "YYYY-MM-DD" instead of the Date object's full
- *                                      toString()/timezone text, which re-parsed to the wrong calendar day server-side
- * 08/28/2026     Jared Espineli        Added getMissingRequiredFields() so the client script can block Print PDF/
- *                                      Export CSV and alert the user when a required field (As of Date) is blank
- * 09/02/2026     Jared Espineli        Added Charge Date column (between Review and Months Option), sourced from
- *                                      the Utilised Charges record - PDF only, csv_lib.js keeps its own COLUMNS
- * 09/02/2026     Jared Espineli        Removed the Charge Date column from the PDF - Charge Date is still used
- *                                      internally (data_lib's isSameMonth/charge grouping) to scope the report to
- *                                      the As of Date's month, just no longer printed as its own column
+ * 08/24/2026     Jared Espineli        Added Export CSV action.
+ * 08/27/2026     Jared Espineli        Added getFiltersFromParams() to build the data lib's filters from Suitelet request params.
+ * 08/28/2026     Jared Espineli        Fixed As of Date shifting by a day and added required-field validation.
+ * 09/02/2026     Jared Espineli        Added, then removed, a printed PDF Charge Date column, still used internally to scope the report.
+ * 09/04/2026     Jared Espineli        Fixed formatPrintedTimestamp to correctly read the account-timezone-shifted date.
  *
  * Copyright (c) 2022 BlueBridge One Business Solutions, All Rights Reserved [Replace appropriately]
  * support@bluebridgeone.com, +44 (0)1932 300007
@@ -30,9 +23,7 @@ define(['N/search'],
      */
     (search) => {
 
-        // Column headers for the PDF only - csv_lib.js defines its own
-        // COLUMNS for the CSV's separate raw-data column set (see its header
-        // comment), so a change here doesn't affect the CSV export.
+        // PDF report column headers.
         const COLUMNS = [
             'Premises', 'Area', 'Units / Parking', 'Tenant', 'Starts', 'Expires',
             'Review', 'Months Option', 'Current Rent', 'Rent Rate', 'Rent Esc%',
@@ -45,7 +36,7 @@ define(['N/search'],
             'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
         ];
 
-        // field/button ids used on the Suitelet form itself
+        // Field/button ids used on the Suitelet form.
         const _FIELDS = {
             FORM: {
                 BUTTON_STYLE:           'custpage_qpg_button_style',
@@ -87,12 +78,12 @@ define(['N/search'],
             _FIELDS.FORM.AS_OF_DATE
         ];
 
-        // Form fields that must have a value before a report can be generated
+        // Fields required before a report can be generated.
         _FIELDS.REQUIRED_FIELD_IDS = [
             _FIELDS.FORM.AS_OF_DATE
         ];
 
-        // Human-readable labels for required field ids, used in the missing-fields alert
+        // Labels for required fields, shown in the missing-fields alert.
         _FIELDS.FIELD_LABELS = {
             [_FIELDS.FORM.AS_OF_DATE]: 'As of Date'
         };
@@ -108,19 +99,19 @@ define(['N/search'],
 
         const pad2 = (n) => String(n).padStart(2, '0');
 
-        //formatting of As of Date value
+        // Formats the As of Date value for print.
         LIB_FX.formatAsOfDate = (date) =>
             `${pad2(date.getDate())} ${MONTH_NAMES[date.getMonth()]} ${date.getFullYear()}`;
 
-        //formatting of the printed date time value
+        // Formats a timestamp for print. Uses UTC getters since the caller already shifts the
+        // Date to the account's timezone.
         LIB_FX.formatPrintedTimestamp = (date) => {
-            const datePart = `${pad2(date.getDate())}/${pad2(date.getMonth() + 1)}/${date.getFullYear()}`;
-            const timePart = `${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())}`;
+            const datePart = `${pad2(date.getUTCDate())}/${pad2(date.getUTCMonth() + 1)}/${date.getUTCFullYear()}`;
+            const timePart = `${pad2(date.getUTCHours())}:${pad2(date.getUTCMinutes())}:${pad2(date.getUTCSeconds())}`;
             return `${datePart} ${timePart}`;
         }
 
-        // Builds the URL for the Print PDF/Export CSV buttons: current filter
-        // values plus an action flag. Client-side only (uses window.location).
+        // Builds the Print PDF/Export CSV button URL from the current filter values and an action flag.
         LIB_FX.buildReportUrl = (currentRecord, action) => {
             const params = new URLSearchParams(window.location.search);
 
@@ -134,13 +125,8 @@ define(['N/search'],
                 }
 
                 if (value instanceof Date) {
-                    // As of Date - getValue() on a DATE field returns a
-                    // Date object. Send the calendar date exactly as
-                    // displayed (this browser's local Y/M/D), not
-                    // String(value)'s full local timestamp+timezone text -
-                    // re-parsing that server-side re-derives Y/M/D in the
-                    // SERVER's timezone instead, which can land on a
-                    // different calendar day than what was picked.
+                    // As of Date - send its local Y/M/D as-is rather than a full timestamp string,
+                    // which would re-parse to the wrong calendar day in the server's timezone.
                     const year = value.getFullYear();
                     const month = String(value.getMonth() + 1).padStart(2, '0');
                     const day = String(value.getDate()).padStart(2, '0');
@@ -156,15 +142,13 @@ define(['N/search'],
             return `${window.location.pathname}?${params.toString()}`;
         }
 
-        // Splits a comma-separated request param (as set by buildReportUrl)
-        // back into an array of id strings. '' /null/undefined -> [].
+        // Splits a comma-separated request param into an array of id strings.
         LIB_FX.parseIdListParam = (value) => {
             if (value === null || value === undefined || value === '') return [];
             return String(value).split(',').map((id) => id.trim()).filter(Boolean);
         }
 
-        // Builds the data lib's filters object (see data_lib buildQuery) from
-        // the Suitelet's request.parameters - shared by the PDF/CSV builders.
+        // Builds the data lib's filters object from the Suitelet's request parameters.
         LIB_FX.getFiltersFromParams = (params) => ({
             portfolioIds: LIB_FX.parseIdListParam(params && params[_FIELDS.FORM.PROPERTY_PORTFOLIO]),
             buildingIds: LIB_FX.parseIdListParam(params && params[_FIELDS.FORM.BUILDING]),
@@ -174,8 +158,7 @@ define(['N/search'],
             unitIds: LIB_FX.parseIdListParam(params && params[_FIELDS.FORM.UNIT])
         });
 
-        // Returns the labels of any required fields (see _FIELDS.REQUIRED_FIELD_IDS)
-        // left blank on the form. Empty array means all required fields are filled in.
+        // Returns the labels of any required fields left blank on the form.
         LIB_FX.getMissingRequiredFields = (currentRecord) => {
             return _FIELDS.REQUIRED_FIELD_IDS
                 .filter((fieldId) => {

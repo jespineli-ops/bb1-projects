@@ -5,13 +5,16 @@
  *
  * Server-only library backing the Email Statement flow - reads each
  * customer's statement recipient/cc addresses and builds/sends the statement
- * email. Used by gts_email_mr.js. The sender (author) is resolved per
- * customer in gts_pdf_lib.js from the customer's subsidiary
+ * email. Used by gts_email_mr.js. The sender (author) and the Email Template
+ * (custrecord_bb1_cus_state_email_template) are both resolved per customer
+ * in gts_pdf_lib.js from the customer's subsidiary
  * (custrecord_bb1_cust_statement_author), not by this library.
  *
  * Date                 Author              Purpose
  * 07-September-2026    Jared Espineli      Initial Release - sends statement emails using a static employee id as the sender.
  * 08-September-2026    Jared Espineli      Removed the static sender - author is now resolved per customer from the subsidiary record.
+ * 16-September-2026    Jared Espineli      Added mergeEmailTemplate() - subject/body now come from the subsidiary's Email Template when one is configured, falling back to the fixed wording otherwise.
+ * 16-September-2026    Jared Espineli      Fixed mergeEmailTemplate() throwing ("options.entity is expected as object") - entity.id must be a Number, not the String customerId comes in as.
  *
  * Copyright (c) 2026 BlueBridge One Business Solutions, All Rights Reserved
  * support@bluebridgeone.com, UK Support: +44 (0)1932 300007 SA Support: +27 (0)10 500 8674
@@ -19,13 +22,14 @@
  * @NApiVersion 2.1
  * @NModuleScope SameAccount
  */
-define(['N/search', 'N/email', 'N/log'],
+define(['N/search', 'N/email', 'N/render', 'N/log'],
     /**
      * @param{search} search
      * @param{email} email
+     * @param{render} render
      * @param{log} log
      */
-    (search, email, log) => {
+    (search, email, render, log) => {
 
         // Free-form, comma-separated address fields on the Customer record.
         const CUSTOMER_FIELD = {
@@ -82,8 +86,43 @@ define(['N/search', 'N/email', 'N/log'],
         }
 
         //-----------------------------------------------
+        //Subject/body from the subsidiary's Email Template
+        //(custrecord_bb1_cus_state_email_template) - lets
+        //each subsidiary send a different subject/body.
+        //Falls back to the fixed wording below when the
+        //subsidiary has no template configured, or if the
+        //merge itself fails.
+        //-----------------------------------------------
+
+        // Merges the subsidiary's Email Template against the customer (and, when there was an invoice in the
+        // period, that invoice - for templates that reference transaction merge fields). Returns null when no
+        // template is configured or the merge fails, so callers can fall back to buildSubject/buildBody.
+        LIB_FX.mergeEmailTemplate = (templateId, customerId, transactionId) => {
+            if (!templateId) return null;
+
+            try {
+                // entity.id (and transactionId, when supplied) must be a Number - render.mergeEmail rejects a
+                // String id with the generic "options.entity is expected as object" error. customerId in
+                // particular arrives here as a String (mapContext.value on the Map/Reduce input).
+                const mergeOptions = {
+                    templateId: Number(templateId),
+                    entity: {type: 'customer', id: Number(customerId)}
+                };
+                if (transactionId) mergeOptions.transactionId = Number(transactionId);
+
+                const mergeResult = render.mergeEmail(mergeOptions);
+
+                return {subject: mergeResult.subject, body: mergeResult.body};
+            } catch (e) {
+                log.error(`Email template merge failed for template ${templateId}, customer ${customerId}`, e.message);
+                return null;
+            }
+        }
+
+        //-----------------------------------------------
         //Subject/body - fixed wording per project spec,
-        //only customer name/billing month vary
+        //only customer name/billing month vary. Fallback
+        //when the subsidiary has no Email Template set.
         //-----------------------------------------------
 
         // HTML-escapes record data (customer name/billing month) dropped into the email body below.

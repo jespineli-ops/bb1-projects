@@ -15,6 +15,8 @@
  * 07-September-2026    Jared Espineli      Folded gts_data_lib.js into this file and extracted buildCustomerStatement so all statement data and rendering logic live in one library.
  * 08-September-2026    Jared Espineli      Bolded key totals/headers, added a Payment Reference line and a clickable Peach Payments logo, and fixed related rendering bugs.
  * 08-September-2026    Jared Espineli      Sourced statement author/queries email/whatsapp from the customer's subsidiary, and added getDefaultPeriodDates() (Statement Date 20th of the month, Start Date 2 months prior) for the Email Statement job's Scheduled deployment.
+ * 15-September-2026    Jared Espineli      Restyled the Entity/Property panel to a stacked label/value layout. Also logs the full XML on a render.xmlToPdf failure (chunked, since log.error truncates at 4000 chars) - render.xmlToPdf gives the same generic "unexpected error" message as SuiteQL on failure, so the markup itself needs logging to find a malformed-XML bug.
+ * 16-September-2026    Jared Espineli      Added getOpenBalance() so Amount Due/aging reflect the true AR balance (unapplied payments/credits included), with the residual folded into the Current bucket so the aging strip still sums to Amount Due.
  *
  * Copyright (c) 2026 BlueBridge One Business Solutions, All Rights Reserved
  * support@bluebridgeone.com, UK Support: +44 (0)1932 300007 SA Support: +27 (0)10 500 8674
@@ -22,10 +24,11 @@
  * @NApiVersion 2.1
  * @NModuleScope SameAccount
  */
-define(['N/query', 'N/search', 'N/error', 'N/render', 'N/file', 'N/url', 'N/log', './bb1_qpg_cstmt_gts_lib_helper'],
+define(['N/query', 'N/search', 'N/record', 'N/error', 'N/render', 'N/file', 'N/url', 'N/log', './bb1_qpg_cstmt_gts_lib_helper'],
     /**
      * @param{query} query
      * @param{search} search
+     * @param{record} record
      * @param{error} error
      * @param{render} render
      * @param{file} file
@@ -33,7 +36,7 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/file', 'N/url', 'N/log'
      * @param{log} log
      * @param{helperLib} helperLib
      */
-    (query, search, error, render, file, url, log, helperLib) => {
+    (query, search, record, error, render, file, url, log, helperLib) => {
 
         const _FIELDS = helperLib._FIELDS;
 
@@ -219,8 +222,11 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/file', 'N/url', 'N/log'
                 return {
                     customer_name: '', entity_name: '', currency_symbol: 'R',
                     statement_author_id: entityFields.statement_author_id,
+                    email_template_id: entityFields.email_template_id,
                     queries_email: entityFields.queries_email,
-                    queries_whatsapp: entityFields.queries_whatsapp
+                    queries_whatsapp: entityFields.queries_whatsapp,
+                    terms_and_conditions: entityFields.terms_and_conditions,
+                    company_logo_url: entityFields.company_logo_url
                 };
             }
 
@@ -236,10 +242,13 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/file', 'N/url', 'N/log'
             headerRow.entity_reg_no = entityFields.entity_reg_no;
             headerRow.payment_url = entityFields.payment_url;
             headerRow.payment_image_url = entityFields.payment_image_url;
+            headerRow.company_logo_url = entityFields.company_logo_url;
             headerRow.customer_entity_id = entityFields.customer_entity_id;
             headerRow.statement_author_id = entityFields.statement_author_id;
+            headerRow.email_template_id = entityFields.email_template_id;
             headerRow.queries_email = entityFields.queries_email;
             headerRow.queries_whatsapp = entityFields.queries_whatsapp;
+            headerRow.terms_and_conditions = entityFields.terms_and_conditions;
             headerRow.bill_address = getBillingAddress(customerId);
 
             return headerRow;
@@ -303,19 +312,28 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/file', 'N/url', 'N/log'
                 bank_guarantee: '',
                 deposit: '',
                 entity_vat_no: '',
-                // Entity Registration No., distinct from Entity VAT No./Recipient Registration No. - no
-                // subsidiary-level field confirmed yet, so left blank until BB1/the client confirm one.
+                // Entity Registration No., distinct from Entity VAT No./Recipient Registration No. - sourced
+                // from the subsidiary's custrecord_alf_company_reg_num field.
                 entity_reg_no: '',
                 payment_url: '',
                 payment_image_url: '',
+                // Subsidiary's own logo (standard "logo" field) - falls back to LOGO_URL when not configured.
+                company_logo_url: '',
                 // Customer's own Entity ID (NetSuite's customer-facing number, e.g. "C000123") - printed as the
                 // statement's Payment Reference so a tenant's bank transfer can be matched back to their account.
                 customer_entity_id: '',
                 // Subsidiary-level Customer Statement Author/Queries fields - left blank when not configured on
                 // the subsidiary, rather than falling back to a hardcoded value (see gts_email_mr.js/QUERIES panel).
                 statement_author_id: '',
+                // Subsidiary's Email Template (custrecord_bb1_cus_state_email_template, List/Record(Email
+                // Template)) - subject/body come from this template per subsidiary; blank falls back to the
+                // fixed wording in gts_email_lib.js (see LIB_FX.buildSubject/buildBody there).
+                email_template_id: '',
                 queries_email: '',
-                queries_whatsapp: ''
+                queries_whatsapp: '',
+                // Subsidiary-level terms/payment instructions, printed where the old freeform bank details
+                // block used to sit, beside the totals box.
+                terms_and_conditions: ''
             };
 
             let subsidiaryId = subsidiaryFromInvoice || null;
@@ -349,11 +367,15 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/file', 'N/url', 'N/log'
                     `Entity VAT No and the payment link cannot be fetched for customer ${customerId}`);
             }
 
-            // Subsidiary record - source of the VAT number and payment URL. 'federalidnumber' isn't a valid
-            // search.lookupFields column on Subsidiary, so this goes straight through SuiteQL instead (no
-            // joins - a join from transaction to subsidiary fails on this account).
+            // Subsidiary record - source of the VAT number, registration number and payment URL.
+            // 'federalidnumber' isn't a valid search.lookupFields column on Subsidiary, so this goes straight
+            // through SuiteQL instead (no joins - a join from transaction to subsidiary fails on this account).
             if (subsidiaryId) {
                 values = fillFromSubsidiaryQuery(subsidiaryId, values);
+                // Looked up separately (cached, via record.load) rather than folded into the SuiteQL above -
+                // 'logo' is a File-type native field that isn't reliably queryable through SuiteQL, and one
+                // bad column there would silently blank out every other subsidiary field on the statement.
+                values.company_logo_url = getSubsidiaryLogoUrl(subsidiaryId);
             }
 
             return values;
@@ -368,13 +390,17 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/file', 'N/url', 'N/log'
                 const sql =
                     'SELECT ' +
                     '    s.federalidnumber                       AS entity_vat_no, ' +
+                    '    s.custrecord_alf_company_reg_num         AS entity_reg_no, ' +
                     '    s.custrecord_bb1_peach_payment_url       AS payment_url, ' +
-                    // A List/Record(File) field - SuiteQL returns the File Cabinet internal id, not a URL.
+                    // List/Record(File) fields - SuiteQL returns the File Cabinet internal id, not a URL.
                     '    s.custrecord_bb1_peach_payment_image     AS payment_image_id, ' +
                     // Employee this subsidiary's statement emails are sent as (List/Record(Employee) field).
                     '    s.custrecord_bb1_cust_statement_author   AS statement_author_id, ' +
+                    // Email Template this subsidiary's statement emails are merged from (List/Record(Email Template) field).
+                    '    s.custrecord_bb1_cus_state_email_template AS email_template_id, ' +
                     '    s.custrecord_bb1_queries_email           AS queries_email, ' +
-                    '    s.custrecord_bb1_queries_whatsapp        AS queries_whatsapp ' +
+                    '    s.custrecord_bb1_queries_whatsapp        AS queries_whatsapp, ' +
+                    '    s.custrecord_bb1_termsandconditions      AS terms_and_conditions ' +
                     'FROM subsidiary s ' +
                     `WHERE s.id = ${assertId(subsidiaryId)}`;
 
@@ -382,12 +408,15 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/file', 'N/url', 'N/log'
 
                 if (rows.length) {
                     values.entity_vat_no = values.entity_vat_no || rows[0].entity_vat_no || '';
+                    values.entity_reg_no = values.entity_reg_no || rows[0].entity_reg_no || '';
                     values.payment_url = values.payment_url || rows[0].payment_url || '';
                     values.payment_image_url = values.payment_image_url ||
-                        resolvePeachPaymentImageUrl(rows[0].payment_image_id);
+                        resolveFileCabinetImageUrl(rows[0].payment_image_id);
                     values.statement_author_id = rows[0].statement_author_id || '';
+                    values.email_template_id = rows[0].email_template_id || '';
                     values.queries_email = rows[0].queries_email || '';
                     values.queries_whatsapp = rows[0].queries_whatsapp || '';
+                    values.terms_and_conditions = rows[0].terms_and_conditions || '';
                 }
 
             } catch (e) {
@@ -398,8 +427,34 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/file', 'N/url', 'N/log'
             return values;
         }
 
-        // Turns the payment image's File Cabinet id into an absolute URL. Returns '' if it can't be resolved.
-        const resolvePeachPaymentImageUrl = (fileId) => {
+        // Per-execution cache of resolved subsidiary logo URLs, keyed by subsidiary id - a merged statement
+        // run maps one customer at a time, and many customers typically share a subsidiary, so this avoids
+        // repeating record.load() + file.load() for every one of them.
+        const subsidiaryLogoUrlCache = {};
+
+        // Looks up and resolves the subsidiary's own logo (standard "logo"/"Subsidiary Logo (Forms)" field)
+        // to an absolute URL, via a full record.load - "logo" is a File-type native field that isn't
+        // reliably exposed through search.lookupFields or SuiteQL. Returns '' if unset/unresolvable.
+        const getSubsidiaryLogoUrl = (subsidiaryId) => {
+            if (Object.prototype.hasOwnProperty.call(subsidiaryLogoUrlCache, subsidiaryId)) {
+                return subsidiaryLogoUrlCache[subsidiaryId];
+            }
+
+            let logoUrl = '';
+            try {
+                const subsidiaryRecord = record.load({type: record.Type.SUBSIDIARY, id: subsidiaryId});
+                logoUrl = resolveFileCabinetImageUrl(subsidiaryRecord.getValue({fieldId: 'logo'}));
+            } catch (e) {
+                log.error(`Subsidiary logo lookup failed for ${subsidiaryId}`, e.message);
+            }
+
+            subsidiaryLogoUrlCache[subsidiaryId] = logoUrl;
+            return logoUrl;
+        }
+
+        // Turns a File Cabinet image id (the payment logo, or the subsidiary's own logo) into an absolute
+        // URL. Returns '' if it can't be resolved.
+        const resolveFileCabinetImageUrl = (fileId) => {
             if (!fileId) return '';
 
             try {
@@ -409,7 +464,7 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/file', 'N/url', 'N/log'
                 return `https://${domain}${imageFile.url}`;
 
             } catch (e) {
-                log.error(`Peach payment image lookup failed for file ${fileId}`, e.message);
+                log.error(`File Cabinet image lookup failed for file ${fileId}`, e.message);
                 return '';
             }
         }
@@ -601,6 +656,34 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/file', 'N/url', 'N/log'
         }
 
         //-----------------------------------------------
+        //True AR balance - taken from the accounting lines, like the statement body, so unapplied payments,
+        //credits and AR journals are included. foreignamountunpaid exists only on invoices, so the aging
+        //summary above alone overstates the balance whenever a receipt or credit is left unapplied.
+        //-----------------------------------------------
+        const getOpenBalance = (customerId, periodEnd) => {
+
+            const sql =
+                'SELECT NVL(SUM(tal.amount), 0) AS balance ' +
+                'FROM transaction t ' +
+                'JOIN transactionline tl ' +
+                '       ON tl.transaction = t.id ' +
+                'JOIN transactionaccountingline tal ' +
+                '       ON tal.transaction = t.id ' +
+                '      AND tal.transactionline = tl.id ' +
+                'JOIN account a ' +
+                '       ON a.id = tal.account ' +
+                `WHERE a.accttype = '${AR_ACCOUNT_TYPE}' ` +
+                "  AND tal.posting = 'T' " +
+                "  AND t.voided = 'F' " +
+                `  AND NVL(tl.entity, t.entity) = ${customerId} ` +
+                `  AND t.trandate <= ${sqlDate(periodEnd)}`;
+
+            const results = runQuery(sql, 'Open balance');
+
+            return results.length ? toNumber(results[0].balance) : 0;
+        }
+
+        //-----------------------------------------------
         //Statement period - date boundaries shared by both public entry points
         //-----------------------------------------------
 
@@ -730,6 +813,22 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/file', 'N/url', 'N/log'
                 row.lines = linesByTransaction[row.transaction_id] || [];
             }
 
+            // Amount Due is taken from the AR lines rather than the aging summary, so unapplied receipts and
+            // credits are reflected.
+            statement.aging.total_due = getOpenBalance(customerId, periodEnd);
+
+            // Unapplied amounts carry no due date and so never land in a bucket. The residual between the
+            // bucketed invoices and the true balance is shown as Current, which keeps the aging strip summing
+            // to Amount Due.
+            const bucketed = toNumber(statement.aging.current_amt) +
+                toNumber(statement.aging.days_30) +
+                toNumber(statement.aging.days_60) +
+                toNumber(statement.aging.days_90) +
+                toNumber(statement.aging.days_120_plus);
+
+            statement.aging.current_amt =
+                toNumber(statement.aging.current_amt) + (statement.aging.total_due - bucketed);
+
             // Current month charges - restricted to the statement month, so a statement spanning several
             // months still shows this month's billing
             let totalExclusive = 0;
@@ -760,14 +859,18 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/file', 'N/url', 'N/log'
         //PDF RENDERING - turns statement data into the merged Generate Statement Suitelet PDF
         //=================================================
 
-        // File Cabinet URL of the Quorum logo. Escape any & as &amp; if this URL changes.
+        // Fallback File Cabinet URL, used only when a subsidiary has no logo of its own set (see
+        // company_logo_url). Escape any & as &amp; if this URL changes.
         const LOGO_URL = 'https://11536405.app.netsuite.com/core/media/media.nl' +
             '?id=5936&amp;c=11536405' +
             '&amp;h=ShdVNtHtCNZxRziqz5XaCmH8XthcQqu1MScOaMoTvGlWj9lm';
 
-        // Logo size in points - keep the ~2.78:1 aspect ratio if resized.
-        const LOGO_WIDTH_PT = 180;
-        const LOGO_HEIGHT_PT = 65;
+        // Logo bounding box, in points. This renderer does not support CSS auto-height on images (tried -
+        // omitting height rendered the image at a hugely oversized, disproportionate size instead of scaling
+        // it), so both dimensions must be explicit; a taller box than the original 180x65 (sized for the old,
+        // wide Quorum wordmark) gives a vertically-oriented subsidiary logo more room before it's squished.
+        const LOGO_WIDTH_PT = 140;
+        const LOGO_HEIGHT_PT = 100;
 
         // Peach Payments logo size in points, shown below the Whatsapp line.
         const PEACH_LOGO_WIDTH_PT = 48;
@@ -795,27 +898,56 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/file', 'N/url', 'N/log'
             return isNaN(number) ? '' : number.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
         }
 
+        // Maps a "Label: Value" line from custbody_alf_bank_det_to_print onto a Bank Details table column -
+        // the field's own labels (left) don't match the printed column headers (right, see buildBankDetailsSection).
+        const BANK_DETAIL_LABELS = {
+            'account name': 'accountName',
+            'bank name': 'bank',
+            'branch': 'branchNo',
+            'account number': 'accountNo'
+        };
+
+        // Parses the free-text bank details block ("Account Name: ...\nBank Name: ...\n...") into the Bank
+        // Details table columns. Unrecognised or missing lines are left blank rather than breaking the table.
+        const parseBankDetails = (bankDetailsText) => {
+            const parsed = {accountName: '', bank: '', branchNo: '', accountNo: ''};
+            if (!bankDetailsText) return parsed;
+
+            String(bankDetailsText).split(/\r\n|\r|\n/).forEach((line) => {
+                const separatorIndex = line.indexOf(':');
+                if (separatorIndex === -1) return;
+
+                const key = BANK_DETAIL_LABELS[line.slice(0, separatorIndex).trim().toLowerCase()];
+                if (key) parsed[key] = line.slice(separatorIndex + 1).trim();
+            });
+
+            return parsed;
+        }
+
         //-----------------------------------------------
         //Header section - logo + title + customer block left, Entity/Property panel right
         //-----------------------------------------------
 
-        // Renders one label/value cell pair in the Entity/Property panel grid.
-        const panelCell = (label, value, colspan) => {
-            const span = colspan ? ` colspan="${colspan}"` : '';
-            const valueWidth = colspan ? '' : ' style="width: 20%;"';
-            return `<td class="cstmt-label" style="width: 30%;"><p style="text-align: left; margin: 0;">${escapeXml(label)}</p></td>` +
-                `<td class="cstmt-value"${span}${valueWidth}><p style="text-align: left; margin: 0;">${escapeXml(value)}</p></td>`;
-        }
+        // Renders one label or value cell in the Entity/Property panel's stacked layout, spanning both
+        // columns when colspan is set.
+        const panelLabelCell = (label, colspan) => `<td class="cstmt-label"${colspan ? ' colspan="2"' : ''}><p style="text-align: left; margin: 0;">${escapeXml(label)}</p></td>`;
+        const panelValueCell = (value, colspan) => `<td class="cstmt-value"${colspan ? ' colspan="2"' : ''}><p style="text-align: left; margin: 0;">${escapeXml(value)}</p></td>`;
+
+        // Renders a full-width label/value block (label row, then value row below it).
+        const panelBlock = (label, value) => `
+                <tr>${panelLabelCell(label, true)}</tr>
+                <tr>${panelValueCell(value, true)}</tr>`;
+
+        // Renders a side-by-side pair of label/value blocks sharing one row of columns.
+        const panelPair = (label1, value1, label2, value2) => `
+                <tr>${panelLabelCell(label1)}${panelLabelCell(label2)}</tr>
+                <tr>${panelValueCell(value1)}${panelValueCell(value2)}</tr>`;
 
         // Renders the Entity/Property panel's rows.
         const buildEntityPanel = (header) => `
-            <table class="cstmt-panel">
-                <tr>${panelCell('Entity', header.entity_name, 3)}</tr>
-                <tr>${panelCell('Entity VAT No.', header.entity_vat_no, 3)}</tr>
-                <tr>${panelCell('Entity Reg. No.', header.entity_reg_no, 3)}</tr>
-                <tr>${panelCell('Property', header.property)}${panelCell('Unit No.', header.unit_no)}</tr>
-                <tr>${panelCell('Recipient VAT No.', header.recipient_vat_no)}${panelCell('Recipient Reg. No.', header.recipient_reg_no)}</tr>
-                <tr>${panelCell('Deposit', formatAmount(header.deposit))}${panelCell('Bank Guarantee', formatAmount(header.bank_guarantee))}</tr>
+            <table class="cstmt-panel">${panelBlock('Entity', header.entity_name)}${panelBlock('Entity VAT No.', header.entity_vat_no)}${panelBlock('Entity Registration No.', header.entity_reg_no)}
+                <tr><td colspan="2" class="cstmt-panel-divider"></td></tr>${panelPair('Property', header.property, 'Unit No.', header.unit_no)}
+                <tr><td colspan="2" class="cstmt-panel-divider"></td></tr>${panelPair('Recipient VAT No.', header.recipient_vat_no, 'Recipient Registration No.', header.recipient_reg_no)}${panelPair('Deposit', formatAmount(header.deposit), 'Bank Guarantee', formatAmount(header.bank_guarantee))}
             </table>
         `;
 
@@ -824,12 +956,15 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/file', 'N/url', 'N/log'
             const addressHtml = header.bill_address
                 ? escapeXml(header.bill_address).replace(/\r\n|\r|\n/g, '<br/>')
                 : '';
+            // LOGO_URL is a hardcoded constant, pre-escaped at its declaration - a resolved subsidiary logo
+            // URL is not, so only that branch needs escapeXml.
+            const logoUrl = header.company_logo_url ? escapeXml(header.company_logo_url) : LOGO_URL;
 
             return `
                 <table class="cstmt-plain" style="width: 100%;">
                     <tr>
                         <td style="width: 55%; vertical-align: top; border: none;">
-                            <img src="${LOGO_URL}" alt="Company Logo" width="${LOGO_WIDTH_PT}" height="${LOGO_HEIGHT_PT}"
+                            <img src="${logoUrl}" alt="Company Logo" width="${LOGO_WIDTH_PT}" height="${LOGO_HEIGHT_PT}"
                                  style="width: ${LOGO_WIDTH_PT}pt; height: ${LOGO_HEIGHT_PT}pt;" />
                             <h1 class="cstmt-title">Tax Invoice &amp; Statement</h1>
                             <p class="cstmt-tenant-name">${escapeXml(header.customer_name)}</p>
@@ -844,12 +979,12 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/file', 'N/url', 'N/log'
         }
 
         //-----------------------------------------------
-        //Statement date/from/for-the-month line
+        //Statement date/invoice no/for-the-month line
         //-----------------------------------------------
         const buildMetaLine = (statement) => `
             <p class="cstmt-meta">
                 Statement Date: <span class="cstmt-meta-value">${escapeXml(statement.statementDate)}</span>&nbsp;&nbsp;&nbsp;&nbsp;
-                From: <span class="cstmt-meta-value">${escapeXml(statement.startDate)}</span>&nbsp;&nbsp;&nbsp;&nbsp;
+                Invoice No: <span class="cstmt-meta-value">${escapeXml(statement.header.document_number)}</span>&nbsp;&nbsp;&nbsp;&nbsp;
                 For the Month: <span class="cstmt-meta-value">${escapeXml(statement.billingMonth)}</span>
             </p>
         `;
@@ -940,11 +1075,10 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/file', 'N/url', 'N/log'
             return `
                 <table class="cstmt-plain" style="width: 100%; margin-top: 6pt;">
                     <tr>
-                        <td style="width: ${COL_DATE + COL_ALLOCATION}%; vertical-align: top; border: none;">
-                            ${statement.header.bank_details
-                                ? `<p style="text-align: left; margin: 0;">${escapeXml(statement.header.bank_details).replace(/\r\n|\r|\n/g, '<br/>')}</p>`
+                        <td style="width: ${COL_DATE + COL_ALLOCATION}%; vertical-align: top; border: none; padding-right: 10pt;">
+                            ${statement.header.terms_and_conditions
+                                ? `<p style="text-align: left; margin: 0;">${escapeXml(statement.header.terms_and_conditions).replace(/\r\n|\r|\n/g, '<br/>')}</p>`
                                 : ''}
-                            <p style="text-align: left; margin: 4pt 0 0 0;">Payment Reference: ${escapeXml(statement.header.customer_entity_id)}</p>
                         </td>
                         <td style="width: ${boxWidth}%; vertical-align: top; border: none;">
                             <table class="cstmt-totals">
@@ -981,22 +1115,17 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/file', 'N/url', 'N/log'
             <table class="cstmt-plain" style="width: 100%; margin-top: 8pt;">
                 <tr>
                     <td style="width: 55%; vertical-align: top; border: none;">
-                        <p class="cstmt-queries">Queries</p>
-                        <p>${escapeXml(statement.header.queries_email)}</p>
-                        <p>Whatsapp Nr: ${escapeXml(statement.header.queries_whatsapp)}</p>
-                        ${statement.header.payment_image_url && statement.header.payment_url
-                            // BFO's <a> wraps text runs reliably, but rarely creates a link annotation over a
-                            // replaced element (an <img>, with no text of its own) - href goes on the <img>
-                            // itself too, which is the more reliable target for a clickable image in this
-                            // renderer. The <a> wrapper is kept as a harmless belt-and-suspenders in case this
-                            // account's BFO build does honour it.
-                            ? `<a href="${escapeXml(statement.header.payment_url)}">` +
-                              `<img src="${escapeXml(statement.header.payment_image_url)}" alt="Peach Payments" ` +
-                              `href="${escapeXml(statement.header.payment_url)}" ` +
-                              `width="${PEACH_LOGO_WIDTH_PT}" height="${PEACH_LOGO_HEIGHT_PT}" /></a>`
-                            : ''}
+                        <table class="cstmt-queries-table">
+                            <thead>
+                                <tr><th>Queries</th></tr>
+                            </thead>
+                            <tbody>
+                                <tr><td>${escapeXml(statement.header.queries_email)}</td></tr>
+                                <tr><td>Whatsapp Nr: ${escapeXml(statement.header.queries_whatsapp)}</td></tr>
+                            </tbody>
+                        </table>
                     </td>
-                    <td style="width: 45%; vertical-align: top; border: none;">
+                    <td style="width: 45%; vertical-align: top; border: none; padding-left: 8pt;">
                         <table class="cstmt-aging">
                             <thead>
                                 <tr>
@@ -1022,6 +1151,54 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/file', 'N/url', 'N/log'
             </table>
         `;
 
+        //-----------------------------------------------
+        //Bank details table - Account Name/Bank/Branch No./Account No., parsed from custbody_alf_bank_det_to_print
+        //(whose own field labels are Account Name/Bank Name/Branch/Account Number - see BANK_DETAIL_LABELS),
+        //plus a highlighted Payment Reference column from the customer's own Entity ID. The clickable payment
+        //logo (subsidiary's custrecord_bb1_peach_payment_image, linking to custrecord_bb1_peach_payment_url)
+        //prints below, left-aligned.
+        //-----------------------------------------------
+        const buildBankDetailsSection = (statement) => {
+            const bank = parseBankDetails(statement.header.bank_details);
+
+            return `
+                <table class="cstmt-bank">
+                    <thead>
+                        <tr>
+                            <th>Account Name</th>
+                            <th>Bank</th>
+                            <th>Branch No.</th>
+                            <th>Account No.</th>
+                            <th class="cstmt-bank-highlight">Payment Reference</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>${escapeXml(bank.accountName)}</td>
+                            <td>${escapeXml(bank.bank)}</td>
+                            <td>${escapeXml(bank.branchNo)}</td>
+                            <td>${escapeXml(bank.accountNo)}</td>
+                            <td class="cstmt-bank-highlight">${escapeXml(statement.header.customer_entity_id)}</td>
+                        </tr>
+                    </tbody>
+                </table>
+                ${statement.header.payment_image_url && statement.header.payment_url
+                    // Kept inside a table cell (not a bare <p>) - every other image on this page lives inside
+                    // a <td>, and a free-floating <img> outside a table triggered a render.xmlToPdf failure.
+                    // BFO's <a> wraps text runs reliably, but rarely creates a link annotation over a replaced
+                    // element (an <img>, with no text of its own) - href goes on the <img> itself too, which is
+                    // the more reliable target for a clickable image in this renderer. The <a> wrapper is kept
+                    // as a harmless belt-and-suspenders in case this account's BFO build does honour it.
+                    ? `<table class="cstmt-plain" style="width: 100%; margin-top: 8pt;"><tr><td style="border: none;">` +
+                      `<a href="${escapeXml(statement.header.payment_url)}">` +
+                      `<img src="${escapeXml(statement.header.payment_image_url)}" alt="Peach Payments" ` +
+                      `href="${escapeXml(statement.header.payment_url)}" ` +
+                      `width="${PEACH_LOGO_WIDTH_PT}" height="${PEACH_LOGO_HEIGHT_PT}" /></a>` +
+                      `</td></tr></table>`
+                    : ''}
+            `;
+        }
+
         // Builds one customer's statement data and rendered page XML together. Throws on failure.
         LIB_FX.buildCustomerStatement = (customerId, filters) => {
             const statement = LIB_FX.buildStatementData(Object.assign({}, filters, {customerId}));
@@ -1031,7 +1208,8 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/file', 'N/url', 'N/log'
                 buildMetaLine(statement) +
                 buildActivityTable(statement) +
                 buildTotalsSection(statement, symbol) +
-                buildQueriesAgingSection(statement);
+                buildQueriesAgingSection(statement) +
+                buildBankDetailsSection(statement);
 
             return {statement, pageXml};
         }
@@ -1075,9 +1253,10 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/file', 'N/url', 'N/log'
                             .cstmt-meta-value { font-weight: bold; }
                             table.cstmt-plain td { border: none; padding: 0; }
                             table.cstmt-panel { width: 100%; border-collapse: collapse; }
-                            table.cstmt-panel td { background-color: #F6F6F6; border: none; padding: 4pt 6pt; vertical-align: top; }
-                            table.cstmt-panel .cstmt-label { font-weight: bold; font-size: 7pt; color: #555555; }
-                            table.cstmt-panel .cstmt-value { font-size: 8.5pt; }
+                            table.cstmt-panel td { background-color: #F6F6F6; border: none; padding: 0 8pt; vertical-align: top; }
+                            table.cstmt-panel .cstmt-label { font-weight: bold; font-size: 7pt; color: #222222; padding-top: 6pt; }
+                            table.cstmt-panel .cstmt-value { font-size: 8.5pt; padding-bottom: 6pt; }
+                            table.cstmt-panel .cstmt-panel-divider { height: 1pt; padding: 0 8pt; border-top: 0.5pt solid #DDDDDD; }
                             table.cstmt-activity { width: 100%; border-collapse: collapse; }
                             table.cstmt-activity th { text-align: left; padding: 4pt; font-size: 7.5pt; font-weight: bold; border-bottom: 1pt solid #333333; }
                             table.cstmt-activity td { padding: 4pt; font-size: 7.5pt; vertical-align: top; border: none; }
@@ -1089,11 +1268,17 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/file', 'N/url', 'N/log'
                             table.cstmt-totals .cstmt-total-row td { border-top: 1pt solid #333333; padding-top: 6pt; }
                             .cstmt-total-strong { font-weight: bold; font-size: 10pt; }
                             .cstmt-total-bold { font-weight: bold; }
-                            .cstmt-queries { font-weight: bold; font-size: 8pt; margin: 0 0 2pt 0; }
+                            table.cstmt-queries-table { width: 100%; border-collapse: collapse; }
+                            table.cstmt-queries-table th { background-color: #EEEEEE; padding: 4pt; font-size: 7.5pt; font-weight: bold; text-align: left; }
+                            table.cstmt-queries-table td { padding: 4pt; font-size: 8pt; }
                             table.cstmt-aging { width: 100%; border-collapse: collapse; }
                             table.cstmt-aging th { background-color: #EEEEEE; padding: 4pt; font-size: 7.5pt; font-weight: bold; }
                             table.cstmt-aging td { padding: 4pt; font-size: 8pt; }
                             table.cstmt-aging .num { text-align: right; }
+                            table.cstmt-bank { width: 100%; border-collapse: collapse; margin-top: 10pt; border-top: 0.5pt solid #CCCCCC; }
+                            table.cstmt-bank th { text-align: left; padding: 4pt; font-size: 7.5pt; font-weight: bold; border-bottom: 1pt solid #333333; }
+                            table.cstmt-bank td { padding: 4pt; font-size: 8pt; border: none; }
+                            table.cstmt-bank .cstmt-bank-highlight { background-color: #EEEEEE; text-align: center; }
                         </style>
                     </head>
                     <body footer="cstmtfooter" footer-height="20pt" size="A4" padding="0.5in">
@@ -1103,7 +1288,22 @@ define(['N/query', 'N/search', 'N/error', 'N/render', 'N/file', 'N/url', 'N/log'
             `;
 
             // xml.trim() strips the leading newline/indentation so <?xml ?> is the first character
-            return render.xmlToPdf({xmlString: xml.trim()});
+            const trimmedXml = xml.trim();
+
+            try {
+                return render.xmlToPdf({xmlString: trimmedXml});
+            } catch (e) {
+                // render.xmlToPdf sets e.message    to a generic string on failure (same as SuiteQL), so the
+                // full XML is logged too, in ~3800-char chunks (log.error truncates a single details value at
+                // 4000 chars) - otherwise a malformed-markup bug is unfindable from the error alone.
+                log.error('render.xmlToPdf failed', e.message);
+                const CHUNK_SIZE = 3800;
+                for (let i = 0; i < trimmedXml.length; i += CHUNK_SIZE) {
+                    log.error(`render.xmlToPdf XML input (chars ${i}-${i + CHUNK_SIZE})`,
+                        trimmedXml.slice(i, i + CHUNK_SIZE));
+                }
+                throw e;
+            }
         }
 
         // Builds the merged PDF straight from request params, one page per marked customer.

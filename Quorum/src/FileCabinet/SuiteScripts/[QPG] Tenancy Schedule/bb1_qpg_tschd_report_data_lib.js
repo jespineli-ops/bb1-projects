@@ -6,84 +6,14 @@
  * Server-only library that queries the Tenancy Schedule workbook data and
  * shapes it for the PDF (grouped, with totals) and CSV (flat) builders.
  *
- * Date        	  Author		        Purpose
+ * Date           Author                Purpose
  * 08/25/2026     Jared Espineli        Initial version - query + row mapping
- * 08/26/2026     Jared Espineli        Group by Accommodation Type/Unit, add Gross Income/Gross Rate and subtotals, drop hardcoded type filter
- * 08/26/2026     Jared Espineli        Re-added Accommodation Type filter (id 5) temporarily for testing
- * 08/26/2026     Jared Espineli        Other Chargings shows display text instead of internal id
- * 08/26/2026     Jared Espineli        Fixed blank Rent Rate/Rate/Gross Rate - now divide by unit counter, same as the Area column
- * 08/26/2026     Jared Espineli        Added getFlatRows() for CSV export - same formulas, no grouping/totals
- * 08/26/2026     Jared Espineli        Added Accommodation Type id 7 to the temporary test filter
- * 08/26/2026     Jared Espineli        Added getPropertyTotals() for the grand Property Totals row (Vacancy/Occupancy TBD)
- * 08/27/2026     Jared Espineli        Replaced the temporary hardcoded Accommodation Type filter with real Suitelet-driven
- *                                      filters: Property Portfolio, Building/Block/Floor/Unit (hierarchical) and Accommodation Type
- * 08/27/2026     Jared Espineli        Added active-lease detection (Starts/Expires Date vs. today) and Total Vacancy/Occupancy
- *                                      figures in getPropertyTotals()
- * 08/28/2026     Jared Espineli        Fixed toDateOnly() misparsing this account's DD/MM/YYYY dates as MM/DD/YYYY (every
- *                                      lease was reading as expired/dateless, so every unit showed as vacant)
- * 08/28/2026     Jared Espineli        Replaced getFlatRows() with getCsvRows(), sourced from the updated CSV workbook
- *                                      query (buildCsvQuery) - raw data, one row per Unit, charge-line amounts summed
- * 08/28/2026     Jared Espineli        As of Date now drives per-row lease activity in both getAccommodationGroups (PDF)
- *                                      and getCsvRows (CSV), not just the Vacancy/Occupancy totals - a unit whose lease
- *                                      isn't active as of that date reads as vacant. toDateOnly exposed via LIB_FX so the
- *                                      PDF/CSV builders parse the As of Date param with the same DD/MM/YYYY-aware logic
- * 08/28/2026     Jared Espineli        isLeaseActive now also checks the Starts Date isn't in the future relative to the
- *                                      As of Date - a lease active = Starts <= As of Date AND (no Expires OR As of Date < Expires)
- * 08/28/2026     Jared Espineli        buildCsvQuery updated for 3 new workbook columns - custrecord_bb1_lease_future,
- *                                      the tenant's entityid and custentity_bb1_group_tenant - CSV export only, per updated
- *                                      workbook query
- * 09/02/2026     Jared Espineli        Added custrecord_bb1_utilised_date (Charge Date) to buildQuery/ROW_COLUMNS -
- *                                      new PDF column, between Review and Months Option. Charge-line-level like Type/
- *                                      Description, so left out of CONTINUATION_BLANK_COLUMNS (prints on every charge
- *                                      row, not just the unit's first)
- * 09/02/2026     Jared Espineli        getAccommodationGroups reworked: Rent lines (no Type/Description) no longer
- *                                      print their own near-empty row - their Current Rent is folded into a single
- *                                      header row per unit. Remaining charge lines are grouped by Type+Description+
- *                                      Charge Date and summed into one row per group, instead of one row per raw
- *                                      charge-line record (e.g. two Effluent charges both dated 04/01/2027 now total
- *                                      into a single 04/01/2027 Effluent row)
- * 09/02/2026     Jared Espineli        Report now scoped to the single calendar month covered by the As of Date -
- *                                      added isSameMonth() and used it to skip Rent/charge lines whose Charge Date
- *                                      falls outside that month in both getAccommodationGroups (PDF) and getCsvRows
- *                                      (CSV), so e.g. As of Date = 02/09/2026 only totals September 2026 rent/charges.
- *                                      buildCsvQuery updated to also select custrecord_bb1_utilised_date (Charge
- *                                      Date), needed for this filter but not added to CSV_ROW_COLUMNS/output
- * 09/02/2026     Jared Espineli        Removed custrecord_bb1_utilised_date (Charge Date) from ROW_COLUMNS - no
- *                                      longer printed as its own PDF column. Still selected by buildQuery/
- *                                      buildCsvQuery and used internally by isSameMonth and the charge-line
- *                                      grouping key, just excluded from the mapped output row
- * 09/03/2026     Jared Espineli        buildCsvQuery: fixed Other Charges (custrecord_bb1_utilised_rate_ex_vat/
- *                                      formula_5) not excluding Rent-type charge lines like the PDF query already
- *                                      does, and fixed formula_3/formula_4 (Total/Gross Income, Gross Rate)
- *                                      double-counting Rent by adding the (then-unfiltered) Other Charges value on
- *                                      top of the Rent value for the same row - now just the row's own rate,
- *                                      correctly summed per unit in getCsvRows. Also switched formula_2/formula_5/
- *                                      formula_4's per-unit divisor from custrecord_bb1_unit_counter to
- *                                      custrecord_bb1_unit_area for the CSV export (PDF's buildQuery is unchanged
- *                                      and still divides by unit counter)
- * 09/03/2026     Jared Espineli        buildCsvQuery: Building State/Country, Unit Status, Property Portfolio and
- *                                      Accommodation Type now wrapped in BUILTIN.DF() so getCsvRows/the CSV export
- *                                      return display text instead of internal ids. State/Country wrapped at their
- *                                      source (SubsidiaryMainAddress) and Portfolio at its source (CUSTOMRECORD_
- *                                      CSEG_BB1_BUILDING) rather than at the outer passthrough alias - both are
- *                                      several subquery levels deep and BUILTIN.DF() is only proven here to resolve
- *                                      through one level of passthrough (see custrecord_bb1_utilised_type). Status/
- *                                      Accommodation Type are direct CUSTOMRECORD_CSEG_BB1_UNIT columns (no
- *                                      passthrough), so wrapped at the outer SELECT instead. PDF's buildQuery is
- *                                      untouched - it doesn't select Building State/Country and already selects
- *                                      Portfolio raw/unused
- * 09/03/2026     Jared Espineli        getPropertyTotals: replaced occupancyTenant (Property Totals Area minus
- *                                      vacant units - an unfinished placeholder, not a percentage) with
- *                                      occupancyPercent (occupancyArea / Property Totals Area * 100), mirroring
- *                                      vacancyPercent, so the PDF's Total Occupancy row prints a % like Total
- *                                      Vacancy does instead of a raw number
- * 09/03/2026     Jared Espineli        getAccommodationGroups: vacantUnits/activeLeaseUnits (feeding vacancyArea/
- *                                      occupancyArea/vacancyPercent/occupancyPercent) now sum unit.area instead of
- *                                      counting unit records (+= 1) - a single Unit record's counter can represent
- *                                      several physical units/bays (e.g. a 10-bed Student record under one lease),
- *                                      so a record count undercounted its contribution to Total Occupancy. Vacancy
- *                                      happened to look right before this since it's common for vacant records to
- *                                      have a counter of 1
+ * 08/26/2026     Jared Espineli        Added Accommodation Type/Unit grouping with subtotals, Gross Income/Gross Rate, and CSV/Property Totals exports.
+ * 08/27/2026     Jared Espineli        Replaced the test filter with real Suitelet-driven location/type filters and added active-lease-based vacancy/occupancy totals.
+ * 08/28/2026     Jared Espineli        Fixed DD/MM/YYYY date misparsing and made As of Date drive lease activity throughout via getCsvRows().
+ * 09/02/2026     Jared Espineli        Reworked unit rows to fold Rent into one row per unit, sum charges by Type+Description+Charge Date, and scope the report to the As of Date's month.
+ * 09/03/2026     Jared Espineli        Fixed CSV double-counting and per-unit divisor bugs, and switched vacancy/occupancy to real, area-based percentages.
+ * 09/04/2026     Jared Espineli        Fixed several field/filter bugs and replaced getAccommodationGroups with getPropertyGroups to group the PDF by Building then Accommodation Type with per-Building and Grand Totals.
  *
  * Copyright (c) 2022 BlueBridge One Business Solutions, All Rights Reserved [Replace appropriately]
  * support@bluebridgeone.com, +44 (0)1932 300007
@@ -94,11 +24,7 @@ define(['N/query'],
      */
     (query) => {
 
-        // Maps each PDF column to its query field. Gross Income/Gross Rate
-        // (formula_3/formula_4) are computed in JS, not SQL - see
-        // getAccommodationGroups. Area uses the unit counter field, not
-        // custrecord_bb1_unit_area (that field is empty here). PDF-only -
-        // see CSV_ROW_COLUMNS below for the CSV export's own column set.
+        // Query fields for each PDF column, in order. Area uses the unit counter field, not custrecord_bb1_unit_area.
         const ROW_COLUMNS = [
             'name',
             'custrecord_bb1_unit_counter',
@@ -110,8 +36,8 @@ define(['N/query'],
             'custrecord_bb1_lease_opt_months',
             'formula_1',
             'formula_2',
-            'custrecord_bb1_lease_rent_escalation',
-            'custrecord_bb1_utilised_type',
+            'custrecord_bb1_lease_rentescalation_per',
+            'custrecord_bb1_utlised_item',
             'custrecord_bb1_utilised_description',
             'custrecord_bb1_utilised_rate_ex_vat',
             'formula_5',
@@ -120,8 +46,7 @@ define(['N/query'],
             'custrecord_bb1_unit_budget_rate'
         ];
 
-        // Columns blanked on a unit's 2nd+ charge row, so unit details print
-        // once per unit in the PDF (not used by the CSV path below).
+        // Columns blanked on a unit's continuation rows, so unit details print once per unit.
         const CONTINUATION_BLANK_COLUMNS = [
             'name',
             'custrecord_bb1_unit_counter',
@@ -133,32 +58,19 @@ define(['N/query'],
             'custrecord_bb1_lease_opt_months',
             'formula_1',
             'formula_2',
-            'custrecord_bb1_lease_rent_escalation',
+            'custrecord_bb1_lease_rentescalation_per',
             'custrecord_bb1_unit_budget_rate'
         ];
 
-        // ROW_COLUMNS entries that come from the Lease/Tenant/Utilised
-        // Charge join, not the Unit record itself. When a unit's lease
-        // isn't active as of the As of Date (see isLeaseActive below), these
-        // are blanked so the unit reads as vacant for that date - only
-        // Premises/Area/Units-Parking/Budget Rate (Unit-level fields) stay.
+        // Lease/Tenant/Charge columns, blanked when the unit's lease isn't active as of the As of Date.
         const LEASE_DERIVED_COLUMNS = ROW_COLUMNS.filter((column) =>
             !['name', 'custrecord_bb1_unit_counter', 'name_1', 'custrecord_bb1_unit_budget_rate'].includes(column));
 
-        // ROW_COLUMNS entries that only ever hold charge-line detail (Other
-        // Chargings/Description/Amount/Rate) - blanked on a unit's header
-        // row in getAccommodationGroups, which carries the unit/lease info +
-        // Current Rent instead. Gross Income/Gross Rate (formula_3/
-        // formula_4) are handled separately (attached to the unit's last
-        // row), so they're excluded here too.
+        // Charge-line-only columns, blanked on a unit's header row.
         const CHARGE_LINE_COLUMNS = ROW_COLUMNS.filter((column) =>
             !CONTINUATION_BLANK_COLUMNS.includes(column) && column !== 'formula_3' && column !== 'formula_4');
 
-        // CSV export columns, in the order they're printed - one query field
-        // per CSV column, per the updated workbook (see buildCsvQuery). Type/
-        // Description are deliberately excluded: they're per-charge-line text
-        // (e.g. "Fixed"/"Fixed Effluent") that can't collapse into a single
-        // value once a unit's charge lines are merged into one CSV row.
+        // CSV export columns in print order. Type/Description are excluded since they can't collapse into one row per unit.
         const CSV_ROW_COLUMNS = [
             'name', 'addr1', 'addr2', 'zip', 'city', 'dropdownstate', 'country',
             'custrecord_bb1_unit_counter', 'custrecord_bb1_unit_area', 'custrecord_bb1_unit_status',
@@ -168,30 +80,20 @@ define(['N/query'],
             'fullname', 'custentity_bb1_group_tenant', 'email', 'phone', 'addressbookaddress', 'addr1_1', 'addr2_1', 'zip_1', 'city_1',
             'dropdownstate_1', 'country_1',
             'custrecord_bb1_lease_start_date', 'custrecord_bb1_lease_end_date', 'custrecord_bb1_lease_review_date',
-            'custrecord_bb1_lease_opt_months', 'custrecord_bb1_lease_rent_escalation',
+            'custrecord_bb1_lease_opt_months', 'custrecord_bb1_lease_rentescalation_per',
             'formula_1', 'formula_2', 'custrecord_bb1_utilised_rateareaexcl_vat', 'custrecord_bb1_utilised_rate_ex_vat',
             'formula_5', 'custrecord_bb1_utilised_amt_inclusiv_vat', 'formula_3', 'formula_4',
             'custrecord_bb1_unit_budget_rate'
         ];
 
-        // These CSV columns are per-charge-line amounts (sourced from the
-        // Utilised Charges join) - when a unit has multiple charge lines,
-        // they're summed into that unit's single CSV row. Every other
-        // CSV_ROW_COLUMNS entry is a Unit/Lease/Tenant-level field that's
-        // identical across all of a unit's charge lines, so it's just read
-        // off the first row.
+        // Amount columns summed across a unit's charge lines into one CSV row.
         const CSV_SUM_COLUMNS = new Set([
             'formula_1', 'formula_2', 'custrecord_bb1_utilised_rateareaexcl_vat',
             'custrecord_bb1_utilised_rate_ex_vat', 'formula_5', 'custrecord_bb1_utilised_amt_inclusiv_vat',
             'formula_3', 'formula_4'
         ]);
 
-        // CSV_ROW_COLUMNS entries that come from the Unit/Building record
-        // itself, not the Lease/Tenant/Utilised Charge join - these stay on
-        // the row regardless of whether the unit's lease is active as of
-        // the As of Date. Everything else in CSV_ROW_COLUMNS is lease-
-        // derived and gets blanked when the lease isn't active (formula_6,
-        // the Occupancy column, is handled separately - see getCsvRows).
+        // Unit/Building-level columns that stay on the row regardless of lease status.
         const CSV_UNIT_LEVEL_COLUMNS = new Set([
             'name', 'addr1', 'addr2', 'zip', 'city', 'dropdownstate', 'country',
             'custrecord_bb1_unit_counter', 'custrecord_bb1_unit_area', 'custrecord_bb1_unit_status',
@@ -201,11 +103,8 @@ define(['N/query'],
         const CSV_LEASE_DERIVED_COLUMNS = CSV_ROW_COLUMNS.filter((column) =>
             column !== 'formula_6' && !CSV_UNIT_LEVEL_COLUMNS.has(column));
 
-        // Builds an "AND <column> IN (?, ?, ...)" fragment for a filter's id
-        // list and pushes those ids onto params in the same order. Must be
-        // called in the exact order its fragment appears in the query text,
-        // left to right, so the '?' placeholders line up with params.
-        // Returns '' (no params pushed) when the filter has no ids selected.
+        // Builds an "AND <column> IN (...)" filter fragment and pushes its ids onto params.
+        // Must be called in the same order the fragments appear in the query text.
         const buildInFilter = (params, column, ids) => {
             if (!ids || !ids.length) return '';
             params.push(...ids);
@@ -213,19 +112,7 @@ define(['N/query'],
         }
 
         /**
-         * Builds the parameterized SuiteQL query + its params array for the
-         * given filters. Every filter is optional - an empty/missing list
-         * means "no restriction" at that level.
-         *
-         * Building/Block/Floor are filtered where each record's own table is
-         * joined (deep inside the nested Unit->Floor->Block->Building
-         * lookup), so a Building/Block/Floor filter restricts Units to those
-         * under the selected record, matching the Suitelet's cascading
-         * Building -> Block -> Floor -> Unit filters. Unit, Property
-         * Portfolio (linked to the Building record) and Accommodation Type
-         * are filtered on the outer query, against the Unit record.
-         *
-         * derived from this workbook: https://11536405.app.netsuite.com/app/common/report/report.nl?workbook=9
+         * Builds the SuiteQL query + params for the PDF's Unit/Lease/Charge data, given optional location/type filters.
          *
          * @param {Object} [filters]
          * @param {Array} [filters.portfolioIds]
@@ -240,8 +127,7 @@ define(['N/query'],
             const f = filters || {};
             const params = [];
 
-            // order matches the left-to-right order these fragments appear
-            // in the query text below - keep both in sync
+            // Order must match how these filters appear in the query text below.
             const buildingFilter = buildInFilter(params, 'CUSTOMRECORD_CSEG_BB1_BUILDING."ID"', f.buildingIds);
             const blockFilter = buildInFilter(params, 'CUSTOMRECORD_CSEG_BB1_BLOCK."ID"', f.blockIds);
             const floorFilter = buildInFilter(params, 'CUSTOMRECORD_CSEG_BB1_FLOOR."ID"', f.floorIds);
@@ -267,7 +153,7 @@ define(['N/query'],
                   CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_lease_review_date AS custrecord_bb1_lease_review_date,
                   CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_date AS custrecord_bb1_utilised_date,
                   CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_lease_opt_months AS custrecord_bb1_lease_opt_months,
-                  CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_lease_rent_escalation AS custrecord_bb1_lease_rent_escalation,
+                  CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_lease_rentescalation_per AS custrecord_bb1_lease_rentescalation_per,
                   CASE WHEN BUILTIN.DF(CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_type) = 'Rent' THEN TO_NUMBER(CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_rate_ex_vat) END AS formula_1,
                   CASE WHEN BUILTIN.DF(CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_type) = 'Rent' THEN TO_NUMBER(CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_rate_ex_vat) / CUSTOMRECORD_CSEG_BB1_UNIT.custrecord_bb1_unit_counter END AS formula_2,
                   CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_rateareaexcl_vat AS custrecord_bb1_utilised_rateareaexcl_vat,
@@ -275,6 +161,7 @@ define(['N/query'],
                   CASE WHEN BUILTIN.DF(CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_type) <> 'Rent' THEN CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_rate_ex_vat / CUSTOMRECORD_CSEG_BB1_UNIT.custrecord_bb1_unit_counter END AS formula_5,
                   CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_amt_inclusiv_vat AS custrecord_bb1_utilised_amt_inclusiv_vat,
                   CASE WHEN BUILTIN.DF(CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_type) <> 'Rent' THEN BUILTIN.DF(CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_type) END AS custrecord_bb1_utilised_type,
+                  CASE WHEN BUILTIN.DF(CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_type) <> 'Rent' THEN BUILTIN.DF(CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utlised_item) END AS custrecord_bb1_utlised_item,
                   CASE WHEN BUILTIN.DF(CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_type) <> 'Rent' THEN CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_description END AS custrecord_bb1_utilised_description,
                   CUSTOMRECORD_CSEG_BB1_UNIT.custrecord_bb1_unit_budget_rate AS custrecord_bb1_unit_budget_rate,
                   CUSTOMRECORD_CSEG_BB1_UNIT.custrecord_bb1_unit_status AS custrecord_bb1_unit_status
@@ -289,8 +176,9 @@ define(['N/query'],
                     CUSTOMRECORD_BB1_LEASE_CONTRACT.custrecord_bb1_lease_end_date AS custrecord_bb1_lease_end_date,
                     CUSTOMRECORD_BB1_LEASE_CONTRACT.custrecord_bb1_lease_review_date AS custrecord_bb1_lease_review_date,
                     CUSTOMRECORD_BB1_LEASE_CONTRACT.custrecord_bb1_lease_opt_months AS custrecord_bb1_lease_opt_months,
-                    CUSTOMRECORD_BB1_LEASE_CONTRACT.custrecord_bb1_lease_rent_escalation AS custrecord_bb1_lease_rent_escalation,
+                    CUSTOMRECORD_BB1_LEASE_CONTRACT.custrecord_bb1_lease_rentescalation_per AS custrecord_bb1_lease_rentescalation_per,
                     CUSTOMRECORD_BB1_UTILISED_CHARGES.custrecord_bb1_utilised_type AS custrecord_bb1_utilised_type,
+                    CUSTOMRECORD_BB1_UTILISED_CHARGES.custrecord_bb1_utlised_item AS custrecord_bb1_utlised_item,
                     CUSTOMRECORD_BB1_UTILISED_CHARGES.custrecord_bb1_utilised_rate_ex_vat AS custrecord_bb1_utilised_rate_ex_vat,
                     CUSTOMRECORD_BB1_UTILISED_CHARGES.custrecord_bb1_utilised_rateareaexcl_vat AS custrecord_bb1_utilised_rateareaexcl_vat,
                     CUSTOMRECORD_BB1_UTILISED_CHARGES.custrecord_bb1_utilised_amt_inclusiv_vat AS custrecord_bb1_utilised_amt_inclusiv_vat,
@@ -356,6 +244,7 @@ define(['N/query'],
                   CUSTOMRECORD_CSEG_BB1_UNIT."ID" = CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.cseg_bb1_unit(+)
                    AND CUSTOMRECORD_CSEG_BB1_UNIT."ID" = MAP_customrecord_cseg_bb1_unit_cseg_bb1_unit_filterby_cseg_bb1_floor_SUB.mapone(+)${unitFilter}${portfolioFilter}${accommTypeFilter}
                 ORDER BY
+                  name,
                   accommodation_type_name,
                   name_1,
                   CASE WHEN BUILTIN.DF(CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_type) = 'Rent' THEN 0 ELSE 1 END,
@@ -366,13 +255,7 @@ define(['N/query'],
         }
 
         /**
-         * Builds the parameterized SuiteQL query + its params array for the
-         * CSV export's updated workbook (Building/Unit/Tenant address
-         * details, Occupied/Vacant, Bed). Same cascading Building -> Block ->
-         * Floor -> Unit filter structure as buildQuery, applied at the same
-         * joins, so the CSV honors the Suitelet's filters exactly like the
-         * PDF does. unit_id is added (not part of the workbook export) so
-         * getCsvRows can group a unit's charge lines into one row.
+         * Builds the SuiteQL query + params for the CSV export (Building/Unit/Tenant address, Occupied/Vacant, Bed).
          *
          * @param {Object} [filters] see buildQuery
          * @returns {{sql: string, params: Array}}
@@ -381,8 +264,7 @@ define(['N/query'],
             const f = filters || {};
             const params = [];
 
-            // order matches the left-to-right order these fragments appear
-            // in the query text below - keep both in sync
+            // Order must match how these filters appear in the query text below.
             const buildingFilter = buildInFilter(params, 'CUSTOMRECORD_CSEG_BB1_BUILDING."ID"', f.buildingIds);
             const blockFilter = buildInFilter(params, 'CUSTOMRECORD_CSEG_BB1_BLOCK."ID"', f.blockIds);
             const floorFilter = buildInFilter(params, 'CUSTOMRECORD_CSEG_BB1_FLOOR."ID"', f.floorIds);
@@ -405,7 +287,7 @@ define(['N/query'],
                   CUSTOMRECORD_CSEG_BB1_UNIT.custrecord_bb1_unit_counter AS custrecord_bb1_unit_counter,
                   CUSTOMRECORD_CSEG_BB1_UNIT.custrecord_bb1_unit_area AS custrecord_bb1_unit_area,
                   BUILTIN.DF(CUSTOMRECORD_CSEG_BB1_UNIT.custrecord_bb1_unit_status) AS custrecord_bb1_unit_status,
-                  MAP_customrecord_cseg_bb1_unit_cseg_bb1_unit_filterby_cseg_bb1_floor_SUB.custrecord_bb1_building_portfolio_0_0_0_0_0 AS custrecord_bb1_building_portfolio,
+                  MAP_customrecord_cseg_bb1_unit_cseg_bb1_unit_filterby_cseg_bb1_floor_SUB.custrecord_bb1_building_portfolio_name_0_0_0_0_0 AS custrecord_bb1_building_portfolio,
                   BUILTIN.DF(CUSTOMRECORD_CSEG_BB1_UNIT.custrecord_bb1_unit_accommodation_type) AS custrecord_bb1_unit_accommodation_type,
                   CUSTOMRECORD_CSEG_BB1_UNIT.name AS name_1,
                   NVL2(BUILTIN.DF(CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_lease_tenant), 'Occupied', 'Vacant') AS formula_6,
@@ -428,7 +310,7 @@ define(['N/query'],
                   CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_lease_end_date AS custrecord_bb1_lease_end_date,
                   CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_lease_review_date AS custrecord_bb1_lease_review_date,
                   CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_lease_opt_months AS custrecord_bb1_lease_opt_months,
-                  CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_lease_rent_escalation AS custrecord_bb1_lease_rent_escalation,
+                  CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_lease_rentescalation_per AS custrecord_bb1_lease_rentescalation_per,
                   CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_date AS custrecord_bb1_utilised_date,
                   CASE WHEN BUILTIN.DF(CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_type) = 'Rent' THEN TO_NUMBER(CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_rate_ex_vat) END AS formula_1,
                   CASE WHEN BUILTIN.DF(CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_type) = 'Rent' THEN TO_NUMBER(CUSTOMRECORD_BB1_LEASE_CONTRACT_SUB.custrecord_bb1_utilised_rate_ex_vat) / CUSTOMRECORD_CSEG_BB1_UNIT.custrecord_bb1_unit_area END AS formula_2,
@@ -464,7 +346,7 @@ define(['N/query'],
                     CUSTOMRECORD_BB1_LEASE_CONTRACT.custrecord_bb1_lease_end_date AS custrecord_bb1_lease_end_date,
                     CUSTOMRECORD_BB1_LEASE_CONTRACT.custrecord_bb1_lease_review_date AS custrecord_bb1_lease_review_date,
                     CUSTOMRECORD_BB1_LEASE_CONTRACT.custrecord_bb1_lease_opt_months AS custrecord_bb1_lease_opt_months,
-                    CUSTOMRECORD_BB1_LEASE_CONTRACT.custrecord_bb1_lease_rent_escalation AS custrecord_bb1_lease_rent_escalation,
+                    CUSTOMRECORD_BB1_LEASE_CONTRACT.custrecord_bb1_lease_rentescalation_per AS custrecord_bb1_lease_rentescalation_per,
                     CUSTOMRECORD_BB1_UTILISED_CHARGES.custrecord_bb1_utilised_type AS custrecord_bb1_utilised_type,
                     CUSTOMRECORD_BB1_UTILISED_CHARGES.custrecord_bb1_utilised_rate_ex_vat AS custrecord_bb1_utilised_rate_ex_vat,
                     CUSTOMRECORD_BB1_UTILISED_CHARGES.custrecord_bb1_utilised_rateareaexcl_vat AS custrecord_bb1_utilised_rateareaexcl_vat,
@@ -522,7 +404,8 @@ define(['N/query'],
                     CUSTOMRECORD_CSEG_BB1_FLOOR_SUB.city_0_0_0_0_0_0 AS city_0_0_0_0_0_0_0,
                     CUSTOMRECORD_CSEG_BB1_FLOOR_SUB.dropdownstate_0_0_0_0_0_0 AS dropdownstate_0_0_0_0_0_0_0,
                     CUSTOMRECORD_CSEG_BB1_FLOOR_SUB.country_0_0_0_0_0_0 AS country_0_0_0_0_0_0_0,
-                    CUSTOMRECORD_CSEG_BB1_FLOOR_SUB.custrecord_bb1_building_portfolio_0_0_0_0 AS custrecord_bb1_building_portfolio_0_0_0_0_0
+                    CUSTOMRECORD_CSEG_BB1_FLOOR_SUB.custrecord_bb1_building_portfolio_0_0_0_0 AS custrecord_bb1_building_portfolio_0_0_0_0_0,
+                    CUSTOMRECORD_CSEG_BB1_FLOOR_SUB.custrecord_bb1_building_portfolio_name_0_0_0_0 AS custrecord_bb1_building_portfolio_name_0_0_0_0_0
                   FROM
                     MAP_customrecord_cseg_bb1_unit_cseg_bb1_unit_filterby_cseg_bb1_floor,
                     (SELECT
@@ -535,7 +418,8 @@ define(['N/query'],
                       MAP_customrecord_cseg_bb1_floor_cseg_bb1_floor_filterby_cseg_bb1_block_SUB.city_0_0_0_0_0 AS city_0_0_0_0_0_0,
                       MAP_customrecord_cseg_bb1_floor_cseg_bb1_floor_filterby_cseg_bb1_block_SUB.dropdownstate_0_0_0_0_0 AS dropdownstate_0_0_0_0_0_0,
                       MAP_customrecord_cseg_bb1_floor_cseg_bb1_floor_filterby_cseg_bb1_block_SUB.country_0_0_0_0_0 AS country_0_0_0_0_0_0,
-                      MAP_customrecord_cseg_bb1_floor_cseg_bb1_floor_filterby_cseg_bb1_block_SUB.custrecord_bb1_building_portfolio_0_0_0 AS custrecord_bb1_building_portfolio_0_0_0_0
+                      MAP_customrecord_cseg_bb1_floor_cseg_bb1_floor_filterby_cseg_bb1_block_SUB.custrecord_bb1_building_portfolio_0_0_0 AS custrecord_bb1_building_portfolio_0_0_0_0,
+                      MAP_customrecord_cseg_bb1_floor_cseg_bb1_floor_filterby_cseg_bb1_block_SUB.custrecord_bb1_building_portfolio_name_0_0_0 AS custrecord_bb1_building_portfolio_name_0_0_0_0
                     FROM
                       CUSTOMRECORD_CSEG_BB1_FLOOR,
                       (SELECT
@@ -547,7 +431,8 @@ define(['N/query'],
                         CUSTOMRECORD_CSEG_BB1_BLOCK_SUB.city_0_0_0_0 AS city_0_0_0_0_0,
                         CUSTOMRECORD_CSEG_BB1_BLOCK_SUB.dropdownstate_0_0_0_0 AS dropdownstate_0_0_0_0_0,
                         CUSTOMRECORD_CSEG_BB1_BLOCK_SUB.country_0_0_0_0 AS country_0_0_0_0_0,
-                        CUSTOMRECORD_CSEG_BB1_BLOCK_SUB.custrecord_bb1_building_portfolio_0_0 AS custrecord_bb1_building_portfolio_0_0_0
+                        CUSTOMRECORD_CSEG_BB1_BLOCK_SUB.custrecord_bb1_building_portfolio_0_0 AS custrecord_bb1_building_portfolio_0_0_0,
+                        CUSTOMRECORD_CSEG_BB1_BLOCK_SUB.custrecord_bb1_building_portfolio_name_0_0 AS custrecord_bb1_building_portfolio_name_0_0_0
                       FROM
                         MAP_customrecord_cseg_bb1_floor_cseg_bb1_floor_filterby_cseg_bb1_block,
                         (SELECT
@@ -560,7 +445,8 @@ define(['N/query'],
                           MAP_customrecord_cseg_bb1_block_cseg_bb1_block_filterby_cseg_bb1_building_SUB.city_0_0_0 AS city_0_0_0_0,
                           MAP_customrecord_cseg_bb1_block_cseg_bb1_block_filterby_cseg_bb1_building_SUB.dropdownstate_0_0_0 AS dropdownstate_0_0_0_0,
                           MAP_customrecord_cseg_bb1_block_cseg_bb1_block_filterby_cseg_bb1_building_SUB.country_0_0_0 AS country_0_0_0_0,
-                          MAP_customrecord_cseg_bb1_block_cseg_bb1_block_filterby_cseg_bb1_building_SUB.custrecord_bb1_building_portfolio_0 AS custrecord_bb1_building_portfolio_0_0
+                          MAP_customrecord_cseg_bb1_block_cseg_bb1_block_filterby_cseg_bb1_building_SUB.custrecord_bb1_building_portfolio_0 AS custrecord_bb1_building_portfolio_0_0,
+                          MAP_customrecord_cseg_bb1_block_cseg_bb1_block_filterby_cseg_bb1_building_SUB.custrecord_bb1_building_portfolio_name_0 AS custrecord_bb1_building_portfolio_name_0_0
                         FROM
                           CUSTOMRECORD_CSEG_BB1_BLOCK,
                           (SELECT
@@ -572,7 +458,8 @@ define(['N/query'],
                             CUSTOMRECORD_CSEG_BB1_BUILDING_SUB.city_0_0 AS city_0_0_0,
                             CUSTOMRECORD_CSEG_BB1_BUILDING_SUB.dropdownstate_0_0 AS dropdownstate_0_0_0,
                             CUSTOMRECORD_CSEG_BB1_BUILDING_SUB.country_0_0 AS country_0_0_0,
-                            CUSTOMRECORD_CSEG_BB1_BUILDING_SUB.custrecord_bb1_building_portfolio AS custrecord_bb1_building_portfolio_0
+                            CUSTOMRECORD_CSEG_BB1_BUILDING_SUB.custrecord_bb1_building_portfolio AS custrecord_bb1_building_portfolio_0,
+                            CUSTOMRECORD_CSEG_BB1_BUILDING_SUB.custrecord_bb1_building_portfolio_name AS custrecord_bb1_building_portfolio_name_0
                           FROM
                             MAP_customrecord_cseg_bb1_block_cseg_bb1_block_filterby_cseg_bb1_building,
                             (SELECT
@@ -585,7 +472,8 @@ define(['N/query'],
                               MAP_customrecord_cseg_bb1_building_cseg_bb1_building_filterby_subsidiary_SUB.city_0 AS city_0_0,
                               MAP_customrecord_cseg_bb1_building_cseg_bb1_building_filterby_subsidiary_SUB.dropdownstate_0 AS dropdownstate_0_0,
                               MAP_customrecord_cseg_bb1_building_cseg_bb1_building_filterby_subsidiary_SUB.country_0 AS country_0_0,
-                              BUILTIN.DF(CUSTOMRECORD_CSEG_BB1_BUILDING.custrecord_bb1_building_portfolio) AS custrecord_bb1_building_portfolio
+                              CUSTOMRECORD_CSEG_BB1_BUILDING.custrecord_bb1_building_portfolio AS custrecord_bb1_building_portfolio,
+                              BUILTIN.DF(CUSTOMRECORD_CSEG_BB1_BUILDING.custrecord_bb1_building_portfolio) AS custrecord_bb1_building_portfolio_name
                             FROM
                               CUSTOMRECORD_CSEG_BB1_BUILDING,
                               (SELECT
@@ -652,24 +540,13 @@ define(['N/query'],
             return isNaN(num) ? null : num;
         }
 
-        // SuiteQL date columns come back as plain strings in the account's
-        // date format (this account: DD/MM/YYYY, e.g. "26/08/2026") - NOT
-        // ISO. JS's native Date parser assumes MM/DD/YYYY for that shape, so
-        // any day > 12 (e.g. "26/08/2026") silently misparses to Invalid
-        // Date. Parse DD/MM/YYYY explicitly instead of trusting new Date().
+        // Matches SuiteQL's DD/MM/YYYY date strings, which JS's native Date parser would misread as MM/DD/YYYY.
         const DATE_DMY_PATTERN = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/;
 
-        // The Suitelet's As of Date param arrives as "YYYY-MM-DD" (see
-        // buildReportUrl in lib_helper.js - sent this way specifically to
-        // avoid timezone ambiguity). Parsed explicitly here too: plain
-        // `new Date("YYYY-MM-DD")` treats that shape as UTC midnight, which
-        // - once broken back into Y/M/D using this runtime's local
-        // timezone - can land on the wrong calendar day.
+        // Matches the As of Date param's YYYY-MM-DD format.
         const DATE_YMD_PATTERN = /^(\d{4})-(\d{1,2})-(\d{1,2})$/;
 
-        // Strips the time portion off a date value (SuiteQL date string,
-        // the As of Date param, or a Date), for date-only comparisons.
-        // Returns null if unparseable.
+        // Strips the time off a date value for date-only comparisons. Returns null if unparseable.
         const toDateOnly = (value) => {
             if (value === null || value === undefined || value === '') return null;
 
@@ -702,19 +579,12 @@ define(['N/query'],
             return isNaN(date.getTime()) ? null : new Date(date.getFullYear(), date.getMonth(), date.getDate());
         }
 
-        // Exposed so the PDF/CSV builders can parse the Suitelet's As of
-        // Date param with the same DD/MM/YYYY-aware logic as the lease
-        // dates - it's the same account-formatted date string shape, so the
-        // same MM/DD/YYYY misparse risk applies if parsed with plain
-        // `new Date(...)`. Returns null if unparseable/empty.
+        // Exposes toDateOnly for the PDF/CSV builders.
         LIB_FX.toDateOnly = toDateOnly;
 
         const roundTo2 = (num) => Math.round(num * 100) / 100;
 
-        // A unit's lease is "active" as of a given date when its Starts Date
-        // exists and isn't in the future relative to that date, AND either
-        // there's no Expires Date (open-ended/month-to-month lease with no
-        // end) or that date is before the Expires Date.
+        // True when a lease's Start Date has passed and its End Date (if any) hasn't.
         const isLeaseActive = (startDateValue, endDateValue, asOfDate) => {
             const start = toDateOnly(startDateValue);
             if (!start || start.getTime() > asOfDate.getTime()) return false;
@@ -723,14 +593,7 @@ define(['N/query'],
             return !end || asOfDate.getTime() < end.getTime();
         }
 
-        // True when a Utilised Charge's Charge Date falls in the same
-        // calendar month/year as the As of Date - e.g. As of Date =
-        // 02/09/2026 only matches charge lines dated in September 2026.
-        // Drives the report's "one month at a time" scope: Rent/charge
-        // lines dated outside that month don't contribute to Current
-        // Rent/Amount/Gross Income (see getAccommodationGroups/getCsvRows).
-        // Returns false for a missing/unparseable Charge Date (e.g. a
-        // vacant unit's outer-joined charge columns).
+        // True when a Charge Date falls in the same calendar month/year as the As of Date.
         const isSameMonth = (dateValue, asOfDate) => {
             const date = toDateOnly(dateValue);
             if (!date) return false;
@@ -743,34 +606,14 @@ define(['N/query'],
             return value === null || value === undefined ? '' : value;
         });
 
-        // Runs the query - one row per unit/charge line, ordered by
-        // Accommodation Type, then Unit, then Rent line first.
+        // Runs the query, returning one row per unit/charge line.
         const runQuery = (filters) => {
             const {sql, params} = buildQuery(filters);
             return query.runSuiteQL({query: sql, params: params}).asMappedResults();
         }
 
         /**
-         * CSV export rows, from the updated workbook query (buildCsvQuery) -
-         * raw data, one row per Unit (not per charge line). A unit with
-         * multiple charge lines (Rent + Fixed Effluent + Fixed Refuse, etc.)
-         * has its CSV_SUM_COLUMNS amounts summed across those lines into a
-         * single row; every other CSV_ROW_COLUMNS field is read off the
-         * first charge line, since it's identical across all of a unit's
-         * charge lines (Unit/Lease/Tenant-level data, not charge-level).
-         *
-         * As of Date drives the same active-lease check as the PDF (see
-         * getAccommodationGroups): when a unit's lease isn't active as of
-         * that date, its CSV_LEASE_DERIVED_COLUMNS (Tenant/Starts/Expires/
-         * amounts/etc.) are blanked and its Occupancy column (formula_6)
-         * reads 'Vacant', overriding the workbook's own Occupied/Vacant
-         * value (which only checks whether a Tenant exists, not dates).
-         *
-         * The report is also scoped to the single calendar month the As of
-         * Date falls in: only Rent/charge lines dated in that month (see
-         * isSameMonth) are included in the CSV_SUM_COLUMNS totals - e.g. As
-         * of Date = 02/09/2026 sums September 2026 rent/charges only, even
-         * if the lease has charge lines dated in other months.
+         * CSV export rows, one per Unit per linked Building, with charge-line amounts summed into each row.
          *
          * @param {Object} [filters] see buildQuery
          * @param {Date} [asOfDate] date to evaluate lease activity/month scope against - defaults to today
@@ -781,28 +624,27 @@ define(['N/query'],
             const rows = query.runSuiteQL({query: sql, params: params}).asMappedResults();
             const referenceDate = toDateOnly(asOfDate) || toDateOnly(new Date());
 
+            // Group by Unit+Building, not Unit alone - a Unit's Block can link to more than one Building, so keying
+            // on unit_id alone would merge/double-count charges across Buildings.
             const unitOrder = [];
             const unitsById = new Map();
 
             rows.forEach((row) => {
-                const unitId = row.unit_id;
-                if (!unitsById.has(unitId)) {
-                    unitsById.set(unitId, []);
-                    unitOrder.push(unitId);
+                const unitKey = `${row.unit_id}|${row.name || ''}`;
+                if (!unitsById.has(unitKey)) {
+                    unitsById.set(unitKey, []);
+                    unitOrder.push(unitKey);
                 }
-                unitsById.get(unitId).push(row);
+                unitsById.get(unitKey).push(row);
             });
 
-            return unitOrder.map((unitId) => {
-                const unitRows = unitsById.get(unitId);
+            return unitOrder.map((unitKey) => {
+                const unitRows = unitsById.get(unitKey);
                 const firstRow = unitRows[0];
                 const hasActiveLease = isLeaseActive(
                     firstRow.custrecord_bb1_lease_start_date, firstRow.custrecord_bb1_lease_end_date, referenceDate);
 
-                // Report scope is one calendar month at a time - only
-                // Rent/charge lines dated in the As of Date's month get
-                // summed into CSV_SUM_COLUMNS below, same restriction as
-                // the PDF (see getAccommodationGroups).
+                // Only charge lines dated in the As of Date's month are summed below.
                 const monthRows = unitRows.filter((row) => isSameMonth(row.custrecord_bb1_utilised_date, referenceDate));
 
                 return CSV_ROW_COLUMNS.map((column) => {
@@ -831,85 +673,64 @@ define(['N/query'],
             });
         }
 
+        // Sums a unit list into one Accommodation Type group's totals, dividing rates by Occupied Area.
+        const summarizeUnitTotals = (units) => {
+            const totals = {area: 0, occupiedArea: 0, currentRent: 0, amount: 0, grossIncome: 0, vacantUnits: 0, activeLeaseUnits: 0};
+
+            units.forEach((unit) => {
+                totals.area += unit.area;
+                totals.currentRent += unit.currentRent;
+                totals.amount += unit.amountSum;
+                totals.grossIncome += unit.grossIncome;
+                if (unit.occupied) totals.occupiedArea += unit.area;
+                // Summed by unit.area, not += 1 per record - a single Unit record's counter can represent several
+                // physical units/bays, so a record count would undercount occupancy. Keeps these on the same scale as totals.area for vacancyPercent/occupancyPercent below.
+                if (unit.hasActiveLease) totals.activeLeaseUnits += unit.area;
+                else totals.vacantUnits += unit.area;
+            });
+
+            totals.rentRate = totals.occupiedArea ? totals.currentRent / totals.occupiedArea : null;
+            totals.rate = totals.occupiedArea ? totals.amount / totals.occupiedArea : null;
+            totals.grossRate = totals.occupiedArea ? totals.grossIncome / totals.occupiedArea : null;
+
+            return totals;
+        }
+
         /**
-         * PDF export rows: groups by Unit first (to compute each unit's
-         * Gross Income/Gross Rate, shown on its last row only), then by
-         * Accommodation Type (to compute that type's subtotal row).
-         * A unit is "occupied" if it has a Current Rent value - only
-         * occupied units' area counts as "Occupied Area", which Rent
-         * Rate/Rate/Gross Rate divide by instead of the type's full area.
-         *
-         * Each unit prints as: one header row (Premises/Area/Tenant/Starts/
-         * Expires/Review/Months Option/Rent Esc%/Current Rent/Rent
-         * Rate/Budget Rate), followed by one row per distinct Type+
-         * Description+Charge Date charge group, each showing that group's
-         * summed Amount/Rate - so e.g. two Effluent charges both dated
-         * 04/01/2027 print as a single 04/01/2027 Effluent row totalling
-         * both. Rent lines (the ones with no Type/Description - see
-         * buildQuery) never get their own row: their value is already
-         * folded into the header row's Current Rent, so printing them added
-         * rows with nothing to show but a Charge Date.
-         *
-         * A unit "has an active lease contract" as of the As of Date when
-         * its Starts Date isn't in the future relative to that date, AND
-         * either there's no Expires Date or that date is before the Expires
-         * Date (see isLeaseActive). This drives the Total Vacancy/Occupancy
-         * figures (see getPropertyTotals) AND the row
-         * data itself: a unit whose lease isn't active as of the As of Date
-         * reads as vacant on the report - its lease-derived columns
-         * (LEASE_DERIVED_COLUMNS) are blanked and it prints only its header
-         * row (no charge groups), so it no longer contributes to Current
-         * Rent/Amount/Gross Income and no longer counts as "occupied" above
-         * either.
-         *
-         * The report is also scoped to the single calendar month the As of
-         * Date falls in: a Rent/charge line only contributes to Current
-         * Rent/Amount/Gross Income (and to the charge groups above) when its
-         * Charge Date is in that same month (see isSameMonth) - e.g. As of
-         * Date = 02/09/2026 shows September 2026 rent/charges only, even for
-         * an active lease with charge lines dated in other months.
+         * PDF export rows, grouped by Building then Accommodation Type then Unit, with subtotals at each level.
          *
          * @param {Object} [filters] see buildQuery
          * @param {Date} [asOfDate] date to evaluate lease activity against - defaults to today
-         * Returns: [{ accommodationType, totals: {...}, rows: [[...], ...] }]
+         * Returns: [{ building, totals: {...}, accommodationGroups: [{ accommodationType, totals: {...}, rows: [[...], ...] }] }]
          */
-        LIB_FX.getAccommodationGroups = (filters, asOfDate) => {
+        LIB_FX.getPropertyGroups = (filters, asOfDate) => {
             const rows = runQuery(filters);
             const referenceDate = toDateOnly(asOfDate) || toDateOnly(new Date());
 
-            // group rows by unit, keeping the order they came back in
+            // Group by Unit+Building, not Unit alone - a Unit's Block can link to more than one Building, so keying
+            // on unit_id alone would merge/double-count charges across Buildings.
             const unitOrder = [];
             const unitsById = new Map();
 
             rows.forEach((row) => {
-                const unitId = row.unit_id;
+                const unitKey = `${row.unit_id}|${row.name || ''}`;
 
-                if (!unitsById.has(unitId)) {
-                    unitsById.set(unitId, {
+                if (!unitsById.has(unitKey)) {
+                    unitsById.set(unitKey, {
+                        buildingName: row.name || '',
                         accommodationType: row.accommodation_type_name || '',
                         area: toNumberOrNull(row.custrecord_bb1_unit_counter) || 0,
                         rows: []
                     });
-                    unitOrder.push(unitId);
+                    unitOrder.push(unitKey);
                 }
 
-                unitsById.get(unitId).rows.push(row);
+                unitsById.get(unitKey).rows.push(row);
             });
 
-            // compute each unit's Current Rent, occupancy and Gross Income/
-            // Gross Rate, then rebuild unit.rows as: one header row (unit/
-            // lease info + Current Rent/Rate) followed by one row per
-            // distinct Type+Description+Charge Date charge group, each
-            // summing that group's Amount - e.g. two Effluent charges both
-            // dated 04/01/2027 collapse into a single 04/01/2027 Effluent
-            // row totalling both amounts. Rent lines (no Type/Description -
-            // see buildQuery) are dropped from the printed rows entirely:
-            // their contribution is already captured via Current Rent on
-            // the header row, so printing them added rows with nothing but
-            // a Charge Date to show. Gross figures are attached to the
-            // unit's last row (header row if it ends up with no charges).
-            unitOrder.forEach((unitId) => {
-                const unit = unitsById.get(unitId);
+            // Rebuilds unit.rows into a header row plus one row per Type+Description+Charge Date charge group.
+            unitOrder.forEach((unitKey) => {
+                const unit = unitsById.get(unitKey);
                 const firstRow = unit.rows[0];
 
                 let currentRent = null;
@@ -920,19 +741,13 @@ define(['N/query'],
                 const chargeGroupsByKey = new Map();
 
                 unit.rows.forEach((row) => {
-                    // Report scope is one calendar month at a time - only
-                    // Rent/charge lines dated in the As of Date's month
-                    // contribute to Current Rent/Amount/Gross Income; a
-                    // charge dated in a different month (e.g. a future
-                    // Effluent charge) is skipped entirely for this run.
+                    // Only Rent/charge lines dated in the As of Date's month contribute to Current Rent/Amount/Gross Income.
                     if (!isSameMonth(row.custrecord_bb1_utilised_date, referenceDate)) return;
 
                     const rent = toNumberOrNull(row.formula_1);
                     if (rent !== null) currentRent = rent;
 
-                    // Rent lines carry no Type (only non-Rent charge lines
-                    // do - see buildQuery's CASE WHEN <> 'Rent'), so this
-                    // also excludes them from the charge grouping below.
+                    // Rent lines carry no Type, so this also excludes them from charge grouping.
                     const isChargeLine = row.custrecord_bb1_utilised_type !== null
                         && row.custrecord_bb1_utilised_type !== undefined
                         && row.custrecord_bb1_utilised_type !== '';
@@ -944,10 +759,11 @@ define(['N/query'],
                         hasCharge = true;
                     }
 
-                    const key = `${row.custrecord_bb1_utilised_type}|${row.custrecord_bb1_utilised_description || ''}|${row.custrecord_bb1_utilised_date || ''}`;
+                    // Other Chargings prints the item (not the type), so lines are grouped by Item+Description+Charge Date.
+                    const key = `${row.custrecord_bb1_utlised_item}|${row.custrecord_bb1_utilised_description || ''}|${row.custrecord_bb1_utilised_date || ''}`;
                     if (!chargeGroupsByKey.has(key)) {
                         chargeGroupsByKey.set(key, {
-                            type: row.custrecord_bb1_utilised_type,
+                            item: row.custrecord_bb1_utlised_item,
                             description: row.custrecord_bb1_utilised_description,
                             date: row.custrecord_bb1_utilised_date,
                             amount: 0
@@ -961,9 +777,7 @@ define(['N/query'],
                     firstRow.custrecord_bb1_lease_start_date, firstRow.custrecord_bb1_lease_end_date, referenceDate);
 
                 if (!unit.hasActiveLease) {
-                    // Reads as vacant for this As of Date: no charge rows,
-                    // just the header row below with every lease-derived
-                    // column blanked.
+                    // Vacant as of this date - drop charge rows and blank lease-derived columns below.
                     chargeGroupOrder.length = 0;
                     currentRent = null;
                     amountSum = 0;
@@ -978,10 +792,11 @@ define(['N/query'],
                 unit.grossIncome = grossIncome || 0;
                 const grossRate = (grossIncome !== null && unit.area) ? grossIncome / unit.area : null;
 
-                // Header row: unit/lease info + Current Rent/Rate, no
-                // charge-line detail (CHARGE_LINE_COLUMNS blanked).
+                // Header row: unit/lease info + Current Rent/Rate, with charge-line detail blanked.
                 const headerRow = Object.assign({}, firstRow);
                 CHARGE_LINE_COLUMNS.forEach((column) => { headerRow[column] = null; });
+                // Blanked so the Building name (printed via the header row) doesn't repeat on every unit.
+                headerRow.name = null;
                 headerRow.formula_1 = unit.hasActiveLease ? currentRent : null;
                 headerRow.formula_2 = (unit.hasActiveLease && currentRent !== null && unit.area)
                     ? currentRent / unit.area : null;
@@ -990,15 +805,13 @@ define(['N/query'],
                     LEASE_DERIVED_COLUMNS.forEach((column) => { headerRow[column] = null; });
                 }
 
-                // One row per charge group: unit/lease info blanked
-                // (CONTINUATION_BLANK_COLUMNS), charge detail + summed
-                // Amount/Rate shown.
+                // One row per charge group, with unit/lease info blanked and charge detail + summed Amount/Rate shown.
                 const chargeRows = chargeGroupOrder.map((key) => {
                     const group = chargeGroupsByKey.get(key);
                     const row = {};
                     CONTINUATION_BLANK_COLUMNS.forEach((column) => { row[column] = null; });
                     row.custrecord_bb1_utilised_date = group.date;
-                    row.custrecord_bb1_utilised_type = group.type;
+                    row.custrecord_bb1_utlised_item = group.item;
                     row.custrecord_bb1_utilised_description = group.description;
                     row.custrecord_bb1_utilised_rate_ex_vat = group.amount;
                     row.formula_5 = unit.area ? group.amount / unit.area : null;
@@ -1012,72 +825,51 @@ define(['N/query'],
                 lastRow.formula_4 = grossRate;
             });
 
-            // group units by accommodation type, keeping the order they came back in
-            const typeOrder = [];
-            const typesByName = new Map();
+            // Group units by Building, then by Accommodation Type within each Building, in first-seen order.
+            const buildingOrder = [];
+            const buildingsByName = new Map();
 
-            unitOrder.forEach((unitId) => {
-                const unit = unitsById.get(unitId);
+            unitOrder.forEach((unitKey) => {
+                const unit = unitsById.get(unitKey);
 
-                if (!typesByName.has(unit.accommodationType)) {
-                    typesByName.set(unit.accommodationType, []);
-                    typeOrder.push(unit.accommodationType);
+                if (!buildingsByName.has(unit.buildingName)) {
+                    buildingsByName.set(unit.buildingName, {typeOrder: [], typesByName: new Map()});
+                    buildingOrder.push(unit.buildingName);
                 }
 
-                typesByName.get(unit.accommodationType).push(unit);
+                const building = buildingsByName.get(unit.buildingName);
+                if (!building.typesByName.has(unit.accommodationType)) {
+                    building.typesByName.set(unit.accommodationType, []);
+                    building.typeOrder.push(unit.accommodationType);
+                }
+                building.typesByName.get(unit.accommodationType).push(unit);
             });
 
-            return typeOrder.map((accommodationType) => {
-                const units = typesByName.get(accommodationType);
-                const totals = {area: 0, occupiedArea: 0, currentRent: 0, amount: 0, grossIncome: 0, vacantUnits: 0, activeLeaseUnits: 0};
+            return buildingOrder.map((buildingName) => {
+                const building = buildingsByName.get(buildingName);
 
-                units.forEach((unit) => {
-                    totals.area += unit.area;
-                    totals.currentRent += unit.currentRent;
-                    totals.amount += unit.amountSum;
-                    totals.grossIncome += unit.grossIncome;
-                    if (unit.occupied) totals.occupiedArea += unit.area;
-                    // Summed by unit.area (custrecord_bb1_unit_counter), not
-                    // += 1 per unit record - a single Unit record can
-                    // represent more than one physical unit/bay (its
-                    // counter), so a record count would undercount e.g. a
-                    // 10-bed Student record with one lease as "1 occupied"
-                    // instead of 10. Keeps vacantUnits/activeLeaseUnits on
-                    // the same scale as totals.area for vacancyPercent/
-                    // occupancyPercent below.
-                    if (unit.hasActiveLease) totals.activeLeaseUnits += unit.area;
-                    else totals.vacantUnits += unit.area;
+                const accommodationGroups = building.typeOrder.map((accommodationType) => {
+                    const units = building.typesByName.get(accommodationType);
+                    const flatRows = units.reduce((acc, unit) => acc.concat(unit.rows), []);
+
+                    return {
+                        accommodationType,
+                        totals: summarizeUnitTotals(units),
+                        rows: flatRows.map(LIB_FX.mapRowToColumns)
+                    };
                 });
 
-                totals.rentRate = totals.occupiedArea ? totals.currentRent / totals.occupiedArea : null;
-                totals.rate = totals.occupiedArea ? totals.amount / totals.occupiedArea : null;
-                totals.grossRate = totals.occupiedArea ? totals.grossIncome / totals.occupiedArea : null;
-
-                const flatRows = units.reduce((acc, unit) => acc.concat(unit.rows), []);
-
                 return {
-                    accommodationType,
-                    totals,
-                    rows: flatRows.map(LIB_FX.mapRowToColumns)
+                    building: buildingName,
+                    // Reuses the same totals call the Grand Totals row uses across every Building.
+                    totals: LIB_FX.getPropertyTotals(accommodationGroups),
+                    accommodationGroups
                 };
             });
         }
 
         /**
-         * Grand "Property Totals" row: sums each Accommodation Type group's
-         * totals (from getAccommodationGroups) across the whole property.
-         * Unlike the per-group subtotals, Rent Rate/Rate/Gross Rate here
-         * divide by total Area (not Occupied Area), per the report spec.
-         *
-         * Also computes the Total Vacancy/Total Occupancy figures - Area-
-         * weighted (sum of custrecord_bb1_unit_counter), not a count of unit
-         * records, so a single Unit record whose counter represents several
-         * physical units/bays contributes its full counter value, same as
-         * everywhere else Area is used in this report:
-         *  - vacancyArea = sum of Area for units without an active lease contract
-         *  - vacancyPercent = vacancyArea / Property Totals Area * 100, rounded to 2 decimals
-         *  - occupancyArea = sum of Area for units with an active lease contract
-         *  - occupancyPercent = occupancyArea / Property Totals Area * 100, rounded to 2 decimals
+         * Sums a list of groups into a "Property Totals" or "Grand Totals" row, including area-weighted vacancy/occupancy percentages.
          */
         LIB_FX.getPropertyTotals = (groups) => {
             const totals = {area: 0, currentRent: 0, amount: 0, grossIncome: 0, vacantUnits: 0, activeLeaseUnits: 0};

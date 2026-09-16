@@ -14,6 +14,7 @@
  * 07-September-2026    Jared Espineli      Added Email Statement - queues gts_email_mr.js and shows a progress page reusing the shared progress-page markup.
  * 08-September-2026    Jared Espineli      Added a warning that refreshing the tab after the PDF opens returns to Customer Search, shown via a new HTML viewer page instead of streaming the PDF directly.
  * 08-September-2026    Jared Espineli      Removed the AUTHOR_ID script parameter - sender is now resolved per customer in gts_email_mr.js instead.
+ * 16-September-2026    Jared Espineli      Added a Back to Search link to the shared progress page markup, shown on both the Generate Statement and Email Statement status pages.
  *
  * Copyright (c) 2026 BlueBridge One Business Solutions, All Rights Reserved
  * support@bluebridgeone.com, UK Support: +44 (0)1932 300007 SA Support: +27 (0)10 500 8674
@@ -196,6 +197,12 @@ define(['N/task', 'N/runtime', 'N/url', 'N/cache', 'N/ui/serverWidget', 'N/log',
                 }
                 .bb1-cstmt-progress-fill.bb1-cstmt-progress-error { background: #B23B3B; }
                 .bb1-cstmt-progress-status { margin-top: 8px; color: #555555; }
+                .bb1-cstmt-progress-back {
+                    display: inline-block; margin-top: 16px; padding: 6px 14px;
+                    background: #2C5266; color: #FFFFFF; text-decoration: none;
+                    border-radius: 4px; font-size: 12px;
+                }
+                .bb1-cstmt-progress-back:hover { background: #1F3B49; }
             </style>
         `;
 
@@ -215,6 +222,7 @@ define(['N/task', 'N/runtime', 'N/url', 'N/cache', 'N/ui/serverWidget', 'N/log',
                         <div id="bb1-cstmt-gts-bar" class="bb1-cstmt-progress-fill"></div>
                     </div>
                     <p id="bb1-cstmt-gts-status" class="bb1-cstmt-progress-status">Starting...</p>
+                    <a class="bb1-cstmt-progress-back" href="${helperLib.LIB_FX.buildBackToSearchUrl()}">Back to Search</a>
                 </div>
                 <script>
                 (function () {

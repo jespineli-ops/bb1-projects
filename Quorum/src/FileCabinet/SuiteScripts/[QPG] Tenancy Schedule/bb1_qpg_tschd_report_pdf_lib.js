@@ -3,41 +3,19 @@
  * @NModuleScope SameAccount
  *
  * Project: Quorum Tenancy Schedule - P102843 Quorum NetSuite Implementation
- * Server-only helper library that builds the Tenancy Schedule PDF.
+ * Server-only helper library that builds the Tenancy Schedule PDF - header/logo, column layout,
+ * data rows, subtotals, totals rows, and styling.
  *
  * Date        	  Author		        Purpose
- * 08/21/2026     Jared Espineli        Initial version - header/logo/column scaffold
- * 08/25/2026     Jared Espineli        Data rows sourced from the workbook query
- * 08/26/2026     Jared Espineli        Added bold Accommodation Type subtotal rows with formatted numbers
- * 08/26/2026     Jared Espineli        Added thin vertical borders between columns
- * 08/26/2026     Jared Espineli        Removed grid lines between detail rows/columns to match reference printout
- * 08/26/2026     Jared Espineli        Removed Current Occupied Area note; boxed Property to its own columns only
- * 08/26/2026     Jared Espineli        Property is now its own table above the main table; total row's top border scoped to Tenant-Budget Rate
- * 08/26/2026     Jared Espineli        Removed total row's top border - reference printout has no line above Accommodation Type totals
- * 08/26/2026     Jared Espineli        Added grand Property Totals row at the end of the table (Vacancy/Occupancy TBD)
- * 08/26/2026     Jared Espineli        Added top border above Property Totals; added Total Vacancy/Occupancy and boxed Grand Totals blocks (values still blank)
- * 08/26/2026     Jared Espineli        Property Totals block no longer bold; boxed blank rows (double border) around the bold Grand Totals block
- * 08/27/2026     Jared Espineli        Data rows now driven by the Suitelet's Portfolio/Building/Block/Floor/Unit/Accommodation Type filters
- * 08/27/2026     Jared Espineli        Total Vacancy/Total Occupancy rows now computed (were blank placeholders)
- * 08/28/2026     Jared Espineli        Totals rows' Units/Parking column now mirrors their Area column, rounded to a whole number
- * 08/28/2026     Jared Espineli        As of Date now drives per-row lease activity too (was Vacancy/Occupancy totals only) -
- *                                      a unit whose lease isn't active as of that date reads as vacant on its own row. As of
- *                                      Date is now parsed with dataLib's DD/MM/YYYY-aware parser instead of plain new Date()
- * 08/28/2026     Jared Espineli        Updated header logo image
- * 08/28/2026     Jared Espineli        Added N/log module (was referenced without being required, throwing ReferenceError
- *                                      and breaking Print PDF entirely)
- * 08/31/2026     Jared Espineli        Fixed wrapped column header labels rendering with stretched letter spacing (BFO
- *                                      justifies wrapped <th> text by default; header labels now wrap in a left-aligned
- *                                      <p>); shrank header logo so it no longer overlaps the table header
- * 09/02/2026     Jared Espineli        New Charge Date column (lib_helper's COLUMNS + data_lib's ROW_COLUMNS) - no
- *                                      changes needed here, header/detail rows are already built generically off those
- * 09/02/2026     Jared Espineli        Charge Date column removed again (lib_helper's COLUMNS + data_lib's
- *                                      ROW_COLUMNS) - no changes needed here either, same reason
- * 09/03/2026     Jared Espineli        Fixed Total Occupancy's Tenant column - was printing propertyTotals.
- *                                      occupancyTenant (Property Totals Area minus vacant units, an unfinished
- *                                      placeholder with no % sign) instead of a percentage. Now built the same way
- *                                      as Total Vacancy: occupancyArea / Property Totals Area * 100, formatted as
- *                                      "NN.NN%" (see data_lib's getPropertyTotals)
+ * 08/21/2026     Jared Espineli        Initial version - header/logo/column scaffold.
+ * 08/25/2026     Jared Espineli        Data rows sourced from the workbook query.
+ * 08/26/2026     Jared Espineli        Added Accommodation Type subtotals and a Grand/Property Totals/Vacancy/Occupancy block, matching the reference printout.
+ * 08/27/2026     Jared Espineli        Data rows now driven by the Suitelet's filters, with Total Vacancy/Occupancy now computed instead of blank.
+ * 08/28/2026     Jared Espineli        Totals rows' Units/Parking now mirrors Area, As of Date drives lease activity, the header logo was updated, and a missing N/log import was fixed.
+ * 08/31/2026     Jared Espineli        Fixed wrapped header labels' stretched letter spacing and shrank the header logo.
+ * 09/02/2026     Jared Espineli        Added, then removed, a Charge Date column (no code changes either time).
+ * 09/03/2026     Jared Espineli        Fixed Total Occupancy's Tenant column printing a placeholder instead of a percentage.
+ * 09/04/2026     Jared Espineli        Rent Esc% now prints correctly, "Printed:" reflects the account's timezone, the header row repeats per page, and each Building now prints its own name row and Totals/Vacancy/Occupancy block.
  *
  * Copyright (c) 2022 BlueBridge One Business Solutions, All Rights Reserved [Replace appropriately]
  * support@bluebridgeone.com, +44 (0)1932 300007
@@ -52,7 +30,14 @@ define(['N/render', 'N/log', './bb1_qpg_tschd_report_lib_helper', './bb1_qpg_tsc
     (render, log, helperLib, dataLib) => {
 
         const _FIELDS = helperLib._FIELDS;
-        // Column headers, shared with the CSV export
+
+        // South Africa Standard Time offset (UTC+2, no daylight saving).
+        const SAST_OFFSET_MINUTES = 120;
+
+        // Shifts a date to South African time.
+        const toSouthAfricanTime = (date) => new Date(date.getTime() + (SAST_OFFSET_MINUTES * 60000));
+
+        // Column headers.
         const COLUMNS = helperLib.COLUMNS;
 
         const LOGO_URL = 'https://11536405.app.netsuite.com/core/media/media.nl?id=5938&c=11536405&h=o2lyIWhKdtb1Pjd2xEoKj_QwbZPiBE_YLqECGFCBBI2rNiTs';
@@ -68,7 +53,7 @@ define(['N/render', 'N/log', './bb1_qpg_tschd_report_lib_helper', './bb1_qpg_tsc
 
         const buildHeaderMacro = (asOfDate) => {
             const logoCell = `<img src="${escapeXml(LOGO_URL)}" alt="Company Logo" style="height: 55pt; width: 157pt;" />`;
-            const printedText = escapeXml(helperLib.LIB_FX.formatPrintedTimestamp(new Date()));
+            const printedText = escapeXml(helperLib.LIB_FX.formatPrintedTimestamp(toSouthAfricanTime(new Date())));
             const asOfDateText = escapeXml(helperLib.LIB_FX.formatAsOfDate(asOfDate));
 
             return `
@@ -100,26 +85,24 @@ define(['N/render', 'N/log', './bb1_qpg_tschd_report_lib_helper', './bb1_qpg_tsc
             `;
         }
 
-        // BFO (the PDF renderer behind render.xmlToPdf) wraps <th>/<td> content
-        // in an internally-justified block by default, so a wrapped header
-        // label's non-last line gets stretched to fill the column width -
-        // with only one word on that line, the stretch shows as letter
-        // spacing (e.g. "G r o s s" above "Income"). Explicitly wrapping the
-        // label in its own left-aligned <p> overrides that default.
+        // Builds the table's column header row.
         const buildColumnHeaderRow = () => {
             return COLUMNS.map((label) => `<th><p style="text-align: left; margin: 0;">${escapeXml(label)}</p></th>`).join('');
         }
 
-        // Small table with just the "Property" label, placed above the main table
-        const buildPropertyTable = () => `
-            <table class="tschd-property-table">
-                <tr><td>Property</td></tr>
-            </table>
-        `;
+        // Fallback label for a Unit not linked to a Floor/Block/Building.
+        const UNASSIGNED_BUILDING_LABEL = '(No Building)';
 
-        // Columns shown with thousands separators and 2 decimals
+        // Builds a Building's name row, printed above its Accommodation Types.
+        const buildBuildingHeaderRow = (buildingName) => {
+            const values = COLUMNS.map(() => '');
+            values[PREMISES_COLUMN_INDEX] = buildingName || UNASSIGNED_BUILDING_LABEL;
+            return `<tr>${buildRowCells(values, {bold: true})}</tr>`;
+        }
+
+        // Columns shown with thousands separators and 2 decimals.
         const NUMERIC_COLUMNS = [
-            'Area', 'Current Rent', 'Rent Rate', 'Rent Esc%', 'Amount', 'Rate',
+            'Area', 'Current Rent', 'Rent Rate', 'Amount', 'Rate',
             'Gross Income', 'Gross Rate', 'Budget Rate'
         ];
         const NUMERIC_COLUMN_INDEXES = new Set(NUMERIC_COLUMNS.map((label) => COLUMNS.indexOf(label)));
@@ -130,6 +113,7 @@ define(['N/render', 'N/log', './bb1_qpg_tschd_report_lib_helper', './bb1_qpg_tsc
         const TENANT_COLUMN_INDEX = COLUMNS.indexOf('Tenant');
         const CURRENT_RENT_COLUMN_INDEX = COLUMNS.indexOf('Current Rent');
         const RENT_RATE_COLUMN_INDEX = COLUMNS.indexOf('Rent Rate');
+        const RENT_ESC_COLUMN_INDEX = COLUMNS.indexOf('Rent Esc%');
         const AMOUNT_COLUMN_INDEX = COLUMNS.indexOf('Amount');
         const RATE_COLUMN_INDEX = COLUMNS.indexOf('Rate');
         const GROSS_INCOME_COLUMN_INDEX = COLUMNS.indexOf('Gross Income');
@@ -141,23 +125,32 @@ define(['N/render', 'N/log', './bb1_qpg_tschd_report_lib_helper', './bb1_qpg_tsc
             return isNaN(num) ? String(value) : num.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
         }
 
-        // Total rows' Units/Parking column mirrors their Area column, rounded
-        // to a whole number (Units/Parking column isn't in NUMERIC_COLUMNS,
-        // so this whole-number value prints as-is, with no decimals).
+        // Formats a fraction as a percentage string (e.g. "8.00%").
+        const formatPercent = (value) => {
+            if (value === null || value === undefined || value === '') return '';
+            const num = Number(value);
+            if (isNaN(num)) return '';
+            const formatted = formatAmount(num * 100);
+            return formatted === '' ? '' : `${formatted}%`;
+        }
+
+        // Rounds a number to the nearest whole number.
         const toWholeNumber = (value) => {
             if (value === null || value === undefined || value === '') return '';
             const num = Number(value);
             return isNaN(num) ? '' : Math.round(num);
         }
 
-        // Renders one row's <td> cells. borderTop/borderBottom box off total/summary rows.
+        // Renders one row's <td> cells.
         const buildRowCells = (values, options) => {
             const bold = options && options.bold;
             const borderTop = options && options.borderTop;
             const borderBottom = options && options.borderBottom;
 
             return values.map((value, index) => {
-                const display = NUMERIC_COLUMN_INDEXES.has(index) ? formatAmount(value) : (value === null || value === undefined ? '' : value);
+                const display = index === RENT_ESC_COLUMN_INDEX ? formatPercent(value)
+                    : NUMERIC_COLUMN_INDEXES.has(index) ? formatAmount(value)
+                    : (value === null || value === undefined ? '' : value);
 
                 const styleParts = [];
                 if (bold) styleParts.push('font-weight: bold;');
@@ -169,7 +162,7 @@ define(['N/render', 'N/log', './bb1_qpg_tschd_report_lib_helper', './bb1_qpg_tsc
             }).join('');
         }
 
-        // Builds one Accommodation Type's total row values, in COLUMNS order
+        // Builds one Accommodation Type's total row values.
         const buildTotalRowValues = (group) => {
             const values = COLUMNS.map(() => '');
             values[PREMISES_COLUMN_INDEX] = group.accommodationType;
@@ -184,8 +177,7 @@ define(['N/render', 'N/log', './bb1_qpg_tschd_report_lib_helper', './bb1_qpg_tsc
             return values;
         }
 
-        // Builds a "Property Totals"/"Grand Totals" row's values, in COLUMNS
-        // order. Tenant column defaults to a literal "100%" (not computed).
+        // Builds a "Property Totals"/"Grand Totals" row's values.
         const buildTotalsRowValues = (label, propertyTotals) => {
             const values = COLUMNS.map(() => '');
             values[PREMISES_COLUMN_INDEX] = label;
@@ -201,9 +193,7 @@ define(['N/render', 'N/log', './bb1_qpg_tschd_report_lib_helper', './bb1_qpg_tsc
             return values;
         }
 
-        // Builds the "Total Vacancy" row's values - Area column is the count
-        // of units without an active lease contract, Tenant column is that
-        // count as a % of Property Totals' Area (rounded to 2 decimals).
+        // Builds the "Total Vacancy" row's values.
         const buildVacancyRowValues = (propertyTotals) => {
             const values = COLUMNS.map(() => '');
             values[PREMISES_COLUMN_INDEX] = 'Total Vacancy';
@@ -213,10 +203,7 @@ define(['N/render', 'N/log', './bb1_qpg_tschd_report_lib_helper', './bb1_qpg_tsc
             return values;
         }
 
-        // Builds the "Total Occupancy" row's values - Area column is the
-        // count of units with an active lease contract, Tenant column is
-        // that count as a % of Property Totals' Area (rounded to 2
-        // decimals) - same shape as buildVacancyRowValues.
+        // Builds the "Total Occupancy" row's values.
         const buildOccupancyRowValues = (propertyTotals) => {
             const values = COLUMNS.map(() => '');
             values[PREMISES_COLUMN_INDEX] = 'Total Occupancy';
@@ -226,15 +213,11 @@ define(['N/render', 'N/log', './bb1_qpg_tschd_report_lib_helper', './bb1_qpg_tsc
             return values;
         }
 
-        // Each Accommodation Type prints its total row first, then its units'
-        // charge rows. After every group: a Property Totals/Total Vacancy/
-        // Total Occupancy block (not bold), a boxed blank row, then a bold
-        // Grand Totals/Total Vacancy/Total Occupancy block, then another
-        // boxed blank row.
+        // Builds all data rows: each Building's sections, then the Grand Totals block.
         const buildDataRows = (filters, asOfDate) => {
-            const groups = dataLib.LIB_FX.getAccommodationGroups(filters, asOfDate);
+            const propertyGroups = dataLib.LIB_FX.getPropertyGroups(filters, asOfDate);
 
-            if (!groups.length) {
+            if (!propertyGroups.length) {
                 return `
                     <tr>
                         <td colspan="${COLUMNS.length}" style="text-align: center; font-style: italic; color: #666666;">
@@ -244,28 +227,32 @@ define(['N/render', 'N/log', './bb1_qpg_tschd_report_lib_helper', './bb1_qpg_tsc
                 `;
             }
 
-            const groupRows = groups.map((group) => {
-                const totalRow = `<tr>${buildRowCells(buildTotalRowValues(group), {bold: true, borderBottom: true})}</tr>`;
-                const detailRows = group.rows.map((row) => `<tr>${buildRowCells(row)}</tr>`).join('');
-                return totalRow + detailRows;
-            }).join('');
-
-            const propertyTotals = dataLib.LIB_FX.getPropertyTotals(groups);
-
-            // Blank row with both borders set - reads as a double line, boxing
-            // off the Grand Totals block from what's above/below it.
+            // Blank boxed row separating totals blocks.
             const boxedBlankRow = `<tr>${buildRowCells(COLUMNS.map(() => ''), {borderTop: true, borderBottom: true})}</tr>`;
 
-            const propertyTotalsRow = `<tr>${buildRowCells(buildTotalsRowValues('Property Totals', propertyTotals), {borderTop: true})}</tr>`;
-            const totalVacancyRow = `<tr>${buildRowCells(buildVacancyRowValues(propertyTotals))}</tr>`;
-            const totalOccupancyRow = `<tr>${buildRowCells(buildOccupancyRowValues(propertyTotals))}</tr>`;
+            const buildingSections = propertyGroups.map((property) => {
+                const buildingHeaderRow = buildBuildingHeaderRow(property.building);
 
-            const grandTotalsRow = `<tr>${buildRowCells(buildTotalsRowValues('Grand Totals', propertyTotals), {bold: true})}</tr>`;
-            const grandTotalVacancyRow = `<tr>${buildRowCells(buildVacancyRowValues(propertyTotals), {bold: true})}</tr>`;
-            const grandTotalOccupancyRow = `<tr>${buildRowCells(buildOccupancyRowValues(propertyTotals), {bold: true})}</tr>`;
+                const groupRows = property.accommodationGroups.map((group) => {
+                    const totalRow = `<tr>${buildRowCells(buildTotalRowValues(group), {bold: true, borderBottom: true})}</tr>`;
+                    const detailRows = group.rows.map((row) => `<tr>${buildRowCells(row)}</tr>`).join('');
+                    return totalRow + detailRows;
+                }).join('');
 
-            return groupRows
-                + propertyTotalsRow + totalVacancyRow + totalOccupancyRow
+                const propertyTotalsRow = `<tr>${buildRowCells(buildTotalsRowValues('Property Totals', property.totals), {borderTop: true})}</tr>`;
+                const totalVacancyRow = `<tr>${buildRowCells(buildVacancyRowValues(property.totals))}</tr>`;
+                const totalOccupancyRow = `<tr>${buildRowCells(buildOccupancyRowValues(property.totals))}</tr>`;
+
+                return buildingHeaderRow + groupRows + propertyTotalsRow + totalVacancyRow + totalOccupancyRow;
+            }).join('');
+
+            const grandTotals = dataLib.LIB_FX.getPropertyTotals(propertyGroups);
+
+            const grandTotalsRow = `<tr>${buildRowCells(buildTotalsRowValues('Grand Totals', grandTotals), {bold: true})}</tr>`;
+            const grandTotalVacancyRow = `<tr>${buildRowCells(buildVacancyRowValues(grandTotals), {bold: true})}</tr>`;
+            const grandTotalOccupancyRow = `<tr>${buildRowCells(buildOccupancyRowValues(grandTotals), {bold: true})}</tr>`;
+
+            return buildingSections
                 + boxedBlankRow
                 + grandTotalsRow + grandTotalVacancyRow + grandTotalOccupancyRow
                 + boxedBlankRow;
@@ -287,16 +274,6 @@ define(['N/render', 'N/log', './bb1_qpg_tschd_report_lib_helper', './bb1_qpg_tsc
                         </macrolist>
                         <style>
                             * { font-family: Arial, Helvetica, sans-serif; }
-                            table.tschd-property-table {
-                                font-size: 6pt;
-                                width: 17%;
-                                border-collapse: collapse;
-                                margin: 0;
-                            }
-                            table.tschd-property-table td {
-                                padding: 3pt;
-                                border: 0.5pt solid #000000;
-                            }
                             table.tschd-table {
                                 font-size: 6pt;
                                 width: 100%;
@@ -320,17 +297,19 @@ define(['N/render', 'N/log', './bb1_qpg_tschd_report_lib_helper', './bb1_qpg_tsc
                         </style>
                     </head>
                     <body header="header" header-height="70pt" size="A4-landscape" padding="0.4in 0.3in 0.4in 0.3in">
-                        ${buildPropertyTable()}
                         <table class="tschd-table">
-                            <tr>${buildColumnHeaderRow()}</tr>
-                            ${buildDataRows(filters, asOfDate)}
+                            <thead>
+                                <tr>${buildColumnHeaderRow()}</tr>
+                            </thead>
+                            <tbody>
+                                ${buildDataRows(filters, asOfDate)}
+                            </tbody>
                         </table>
                     </body>
                 </pdf>
             `;
 
-            // xml.trim() strips the leading newline/indentation so <?xml ?> is the first character
-
+            // Trim so <?xml ?> is the first character.
             return render.xmlToPdf({xmlString: xml.trim()});
         }
 
