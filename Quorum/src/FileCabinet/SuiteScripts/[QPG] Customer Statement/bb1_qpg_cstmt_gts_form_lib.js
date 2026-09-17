@@ -238,11 +238,10 @@ define(['N/search', 'N/runtime', 'N/log', 'N/ui/serverWidget', './bb1_qpg_cstmt_
                 // Restores a mark made on an earlier visit to THIS page.
                 const wasMarked = selectedIds.indexOf(String(result.id)) !== -1;
                 sublist.setSublistValue({id: _FIELDS.RESULTS.SELECT, line: line, value: wasMarked ? 'T' : 'F'});
-                sublist.setSublistValue({id: _FIELDS.RESULTS.ID, line: line, value: result.id || BLANK});
-
                 // Guarded individually - a one-to-many join on this search (e.g. a Multi-Subsidiary Customer
                 // join) can leave a stray result row unable to resolve a column, especially at a page boundary.
                 // One bad row shouldn't blank out the whole page, so a failed read just renders blank for that cell.
+                sublist.setSublistValue({id: _FIELDS.RESULTS.ID, line: line, value: safeRead(result, 'getValue', 'entityid')});
                 sublist.setSublistValue({id: _FIELDS.RESULTS.CUSTOMER, line: line, value: safeRead(result, 'getValue', 'altname')});
                 sublist.setSublistValue({id: _FIELDS.RESULTS.SUBSIDIARY, line: line, value: safeRead(result, 'getText', 'subsidiary')});
                 sublist.setSublistValue({id: _FIELDS.RESULTS.CURRENCY, line: line, value: safeRead(result, 'getText', 'currency')});
