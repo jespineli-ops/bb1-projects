@@ -17,9 +17,9 @@
  * @NModuleScope SameAccount
  */
 
-define(['N/query', 'N/runtime', 'N/render', 'N/file', 'N/url', 'N/format', 'N/error', 'N/log'],
+define(['N/query', 'N/runtime', 'N/render', 'N/file', 'N/url', 'N/format', 'N/record', 'N/error', 'N/log'],
 
-    function (query, runtime, render, file, url, format, error, log) {
+    function (query, runtime, render, file, url, format, record, error, log) {
 
         //-----------------------------------------------
         //Account-specific constants
@@ -44,6 +44,10 @@ define(['N/query', 'N/runtime', 'N/render', 'N/file', 'N/url', 'N/format', 'N/er
         var AR_ACCOUNT_TYPE       = 'AcctRec';
         var SQL_DATE_MASK         = 'YYYY-MM-DD';
         var REPORT_TITLE          = 'Tenant Billing History';
+
+        // PDF header logo box, in points - the logo is scaled down (never up) to fit
+        var LOGO_MAX_WIDTH        = 150;
+        var LOGO_MAX_HEIGHT       = 58;
 
         var MONTH_NAMES           = ['January', 'February', 'March', 'April', 'May', 'June',
                                      'July', 'August', 'September', 'October', 'November', 'December'];
@@ -155,6 +159,10 @@ define(['N/query', 'N/runtime', 'N/render', 'N/file', 'N/url', 'N/format', 'N/er
                 tenants = tenants.slice(0, getMaxTenants());
             }
 
+            // One PDF header, so one subsidiary logo - resolved from the tenants that
+            // will actually appear, before any of them are dropped for no activity
+            data.subsidiaryLogo = resolveReportSubsidiary(tenants, data.warnings);
+
             if (!tenants.length) {
                 data.tenants = [];
                 return data;
@@ -234,6 +242,9 @@ define(['N/query', 'N/runtime', 'N/render', 'N/file', 'N/url', 'N/format', 'N/er
                         "   AND t.voided = 'F' " +
                         "   AND t.trandate <= " + sqlDate(filters.periodEnd) + " ";
 
+            // All four criteria combine (AND) - e.g. Property + Portfolio + Accommodation
+            // Type + Tenant together narrows to that tenant's history for that property,
+            // aligned to the portfolio/accommodation type selected
             if (filters.customerId) {
                 where += " AND t.entity = " + assertId(filters.customerId) + " ";
             }
@@ -262,7 +273,8 @@ define(['N/query', 'N/runtime', 'N/render', 'N/file', 'N/url', 'N/format', 'N/er
                 "    x.customer_name, " +
                 "    x.property, " +
                 "    x.unit_no, " +
-                "    x.currency_symbol " +
+                "    x.currency_symbol, " +
+                "    x.subsidiary_id " +
                 "FROM ( " +
                 "    SELECT " +
                 "        t.entity                                 AS customer_id, " +
@@ -270,15 +282,234 @@ define(['N/query', 'N/runtime', 'N/render', 'N/file', 'N/url', 'N/format', 'N/er
                 "        BUILTIN.DF(t.cseg_bb1_building)          AS property, " +
                 "        BUILTIN.DF(t.cseg_bb1_unit)              AS unit_no, " +
                 "        t.custbody_alf_currency_symbol           AS currency_symbol, " +
+                "        c.subsidiary                             AS subsidiary_id, " +
                 "        ROW_NUMBER() OVER (PARTITION BY t.entity " +
                 "                           ORDER BY t.trandate DESC, t.id DESC) AS rn " +
                 "    FROM transaction t " +
+                "    LEFT JOIN customer c ON c.id = t.entity " +
                 where +
                 ") x " +
                 "WHERE x.rn = 1 " +
                 "ORDER BY x.property, x.customer_name";
 
             return runQuery(sql, 'Tenant directory');
+        }
+
+        //-----------------------------------------------
+        //Subsidiary logo for the PDF header - the report
+        //has one header, so one subsidiary is picked even
+        //when a Property/Portfolio run spans several
+        //-----------------------------------------------
+        function resolveReportSubsidiary(tenants, warnings) {
+
+            if (!tenants.length) {
+                return null;
+            }
+
+            var subsidiaryId = tenants[0].subsidiary_id;
+            var mixed        = false;
+
+            for (var i = 1; i < tenants.length; i++) {
+                if (tenants[i].subsidiary_id !== subsidiaryId) {
+                    mixed = true;
+                    break;
+                }
+            }
+
+            if (mixed) {
+                warnings.push('Selection spans more than one subsidiary - the header logo ' +
+                              'shown belongs to the first tenant only.');
+            }
+
+            return getSubsidiaryLogo(subsidiaryId, warnings);
+        }
+
+        // record.load rather than search.lookupFields - the Subsidiary Logo (Forms)
+        // field is an image-select field whose value search.lookupFields does not
+        // return in the usual {value,text} shape, but getValue() does reliably
+        function getSubsidiaryLogo(subsidiaryId, warnings) {
+
+            if (!subsidiaryId) {
+                return null;
+            }
+
+            try {
+
+                var subsidiaryRecord = record.load({ type: 'subsidiary', id: subsidiaryId });
+                var logoFileId       = subsidiaryRecord.getValue({ fieldId: 'logo' });
+
+                if (!logoFileId) {
+                    return null;
+                }
+
+                var logoFile = file.load({ id: logoFileId });
+                var contents = logoFile.getContents();
+
+                // BFO does not reliably auto-scale an <img> from one dimension alone, so
+                // the logo's real pixel size is read from the file and explicitly fitted
+                // into the header box, preserving its aspect ratio
+                var bytes   = base64ToBytes(contents);
+                var natural = imageDimensions(logoFile.fileType, bytes);
+                var box     = fitLogoBox(natural);
+
+                return {
+                    dataUri: 'data:' + logoMimeType(logoFile.fileType) + ';base64,' + contents,
+                    width:   box.width,
+                    height:  box.height
+                };
+
+            } catch (e) {
+                // Surfaced as a report warning, not just the execution log, so a
+                // missing/inaccessible logo is diagnosable without blocking the report
+                log.error('Subsidiary logo fetch failed', e);
+                warnings.push('The subsidiary logo could not be loaded (' + e.message +
+                              ') - the report header is shown without it.');
+                return null;
+            }
+        }
+
+        // The Subsidiary Logo (Forms) field only accepts JPG/GIF, PNG covered defensively
+        function logoMimeType(fileType) {
+
+            if (fileType === file.Type.GIFIMAGE) {
+                return 'image/gif';
+            }
+
+            if (fileType === file.Type.PNGIMAGE) {
+                return 'image/png';
+            }
+
+            return 'image/jpeg';
+        }
+
+        // Scales the logo's natural pixel size down to fit the header box, without
+        // ever upscaling a small logo past its own size
+        function fitLogoBox(natural) {
+
+            if (!natural || !natural.width || !natural.height) {
+                return { width: LOGO_MAX_WIDTH, height: LOGO_MAX_HEIGHT };
+            }
+
+            var scale = Math.min(LOGO_MAX_WIDTH / natural.width, LOGO_MAX_HEIGHT / natural.height, 1);
+
+            return {
+                width:  Math.round(natural.width * scale),
+                height: Math.round(natural.height * scale)
+            };
+        }
+
+        // Dispatches to the right header parser for the pixel dimensions - returns
+        // null (falls back to the default box) rather than failing the report
+        function imageDimensions(fileType, bytes) {
+
+            try {
+
+                if (fileType === file.Type.GIFIMAGE) {
+                    return gifDimensions(bytes);
+                }
+
+                if (fileType === file.Type.PNGIMAGE) {
+                    return pngDimensions(bytes);
+                }
+
+                return jpegDimensions(bytes);
+
+            } catch (e) {
+                log.error('Logo dimension parse failed', e);
+                return null;
+            }
+        }
+
+        // GIF87a/GIF89a: width/height are little-endian uint16 at bytes 6-9
+        function gifDimensions(bytes) {
+
+            return {
+                width:  bytes[6] | (bytes[7] << 8),
+                height: bytes[8] | (bytes[9] << 8)
+            };
+        }
+
+        // PNG: width/height are big-endian uint32 at bytes 16-23, inside the
+        // mandatory-first IHDR chunk
+        function pngDimensions(bytes) {
+
+            return {
+                width:  ((bytes[16] << 24) | (bytes[17] << 16) | (bytes[18] << 8) | bytes[19]) >>> 0,
+                height: ((bytes[20] << 24) | (bytes[21] << 16) | (bytes[22] << 8) | bytes[23]) >>> 0
+            };
+        }
+
+        // JPEG: walk the marker segments to the first SOF marker, which carries the
+        // pixel height/width as big-endian uint16 values
+        function jpegDimensions(bytes) {
+
+            var offset = 2;
+
+            while (offset < bytes.length - 1) {
+
+                if (bytes[offset] !== 0xFF) {
+                    offset++;
+                    continue;
+                }
+
+                var marker = bytes[offset + 1];
+
+                // Markers with no length/payload of their own
+                if (marker === 0xD8 || marker === 0xD9 || marker === 0x01 ||
+                    (marker >= 0xD0 && marker <= 0xD7)) {
+                    offset += 2;
+                    continue;
+                }
+
+                var segmentLength = (bytes[offset + 2] << 8) | bytes[offset + 3];
+                var isSofMarker   = marker >= 0xC0 && marker <= 0xCF &&
+                                    marker !== 0xC4 && marker !== 0xC8 && marker !== 0xCC;
+
+                if (isSofMarker) {
+                    return {
+                        height: (bytes[offset + 5] << 8) | bytes[offset + 6],
+                        width:  (bytes[offset + 7] << 8) | bytes[offset + 8]
+                    };
+                }
+
+                offset += 2 + segmentLength;
+            }
+
+            return null;
+        }
+
+        var BASE64_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+
+        // Manual decode - N/file has no binary byte accessor, only base64 text, and
+        // the image dimension parsers need the raw bytes
+        function base64ToBytes(base64) {
+
+            var clean = String(base64).replace(/[\r\n]/g, '');
+            var bytes = [];
+
+            for (var i = 0; i < clean.length; i += 4) {
+
+                var c0 = BASE64_CHARS.indexOf(clean.charAt(i));
+                var c1 = BASE64_CHARS.indexOf(clean.charAt(i + 1));
+                var c2 = BASE64_CHARS.indexOf(clean.charAt(i + 2));
+                var c3 = BASE64_CHARS.indexOf(clean.charAt(i + 3));
+
+                if (c0 === -1 || c1 === -1) {
+                    break;
+                }
+
+                bytes.push((c0 << 2) | (c1 >> 4));
+
+                if (c2 !== -1) {
+                    bytes.push(((c1 & 0x0F) << 4) | (c2 >> 2));
+                }
+
+                if (c3 !== -1) {
+                    bytes.push(((c2 & 0x03) << 6) | c3);
+                }
+            }
+
+            return bytes;
         }
 
         //-----------------------------------------------
@@ -1384,6 +1615,48 @@ define(['N/query', 'N/runtime', 'N/render', 'N/file', 'N/url', 'N/format', 'N/er
             return rowCount;
         }
 
+        // Letterhead-style header repeated on every page: subsidiary logo, title and
+        // period covered centred, Printed date/Page number right-aligned
+        function buildHeaderBarXml(data) {
+
+            var logo = data.subsidiaryLogo;
+
+            var logoCell = '';
+            if (logo) {
+                logoCell = '<img src="' + logo.dataUri + '" style="width:' + logo.width +
+                           'pt;height:' + logo.height + 'pt;"/>';
+            }
+
+            var titleText   = escapeXml(REPORT_TITLE);
+            var periodText  = escapeXml(periodRangeLabel(data.filters.fromPeriod, data.filters.toPeriod));
+            var printedText = escapeXml(formatDate(todayIsoDate()));
+
+            // Matches the Tenancy Schedule report's proven header layout - inline
+            // styles throughout, since a class-based stylesheet does not reliably
+            // stretch/centre a nested table's cells in this renderer
+            var xml = '';
+
+            xml += '<table style="width:100%;border:0;">';
+            xml += '<tr>';
+            xml += '<td style="width:25%;vertical-align:middle;border:none;">' + logoCell + '</td>';
+            xml += '<td style="width:45%;vertical-align:middle;border:none;">';
+            xml += '<table style="width:100%;border:0;">';
+            xml += '<tr><td align="center" style="text-align:center;border:none;">' +
+                   '<span style="font-size:15pt;font-weight:bold;">' + titleText + '</span></td></tr>';
+            xml += '<tr><td align="center" style="text-align:center;border:none;">' +
+                   '<span style="font-size:9pt;font-weight:normal;">' + periodText + '</span></td></tr>';
+            xml += '</table>';
+            xml += '</td>';
+            xml += '<td style="width:30%;text-align:right;vertical-align:middle;font-size:8pt;border:none;">' +
+                   'Printed: ' + printedText + '<br/>' +
+                   'Page: <pagenumber/>' +
+                   '</td>';
+            xml += '</tr>';
+            xml += '</table>';
+
+            return xml;
+        }
+
         function buildReportXml(data) {
 
             var xml = '';
@@ -1410,6 +1683,9 @@ define(['N/query', 'N/runtime', 'N/render', 'N/file', 'N/url', 'N/format', 'N/er
             xml += '.footnote { font-size: 6.5pt; color: #777777; }';
             xml += '</style>';
             xml += '<macrolist>';
+            xml += '<macro id="bhheader">';
+            xml += buildHeaderBarXml(data);
+            xml += '</macro>';
             xml += '<macro id="bhfooter">';
             xml += '<table><tr>';
             xml += '<td class="footnote">' + escapeXml(REPORT_TITLE) +
@@ -1420,11 +1696,8 @@ define(['N/query', 'N/runtime', 'N/render', 'N/file', 'N/url', 'N/format', 'N/er
             xml += '</macrolist>';
             xml += '</head>';
 
-            xml += '<body footer="bhfooter" footer-height="24pt" padding="0.4in" size="A4">';
-
-            xml += '<h1>' + escapeXml(REPORT_TITLE) + '</h1>';
-            xml += '<p>Periods ' + escapeXml(compactPeriod(data.filters.fromPeriod)) +
-                   ' to ' + escapeXml(compactPeriod(data.filters.toPeriod)) + '</p>';
+            xml += '<body header="bhheader" header-height="90pt" ' +
+                   'footer="bhfooter" footer-height="24pt" padding="0.4in" size="A4">';
 
             for (var i = 0; i < data.warnings.length; i++) {
                 xml += '<p class="footnote">' + escapeXml(data.warnings[i]) + '</p>';
@@ -1976,13 +2249,16 @@ define(['N/query', 'N/runtime', 'N/render', 'N/file', 'N/url', 'N/format', 'N/er
             return validated.join(',');
         }
 
+        // A native MULTISELECT form submission joins its values with the NetSuite
+        // multi-value delimiter (), not a comma - the Download PDF/CSV button
+        // URLs join with a comma instead, so both are accepted here
         function parseIdList(value) {
 
             if (!value) {
                 return [];
             }
 
-            var parts = String(value).split(',');
+            var parts = String(value).split(/[,\u0005]/);
             var list  = [];
 
             for (var i = 0; i < parts.length; i++) {
@@ -2076,6 +2352,16 @@ define(['N/query', 'N/runtime', 'N/render', 'N/file', 'N/url', 'N/format', 'N/er
             var month = parseInt(String(yearMonth).substring(5, 7), 10);
 
             return MONTH_NAMES[month - 1] + ' ' + year;
+        }
+
+        // 'July 2026 to October 2026', or just 'July 2026' for a single-period report
+        function periodRangeLabel(fromPeriod, toPeriod) {
+
+            if (fromPeriod === toPeriod) {
+                return monthLabel(fromPeriod);
+            }
+
+            return monthLabel(fromPeriod) + ' to ' + monthLabel(toPeriod);
         }
 
         function todayYearMonth() {

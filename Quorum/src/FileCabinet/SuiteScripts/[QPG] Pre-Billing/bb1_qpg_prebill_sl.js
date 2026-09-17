@@ -92,7 +92,7 @@ define(['N/ui/serverWidget', 'N/log', './bb1_qpg_prebill_lib'],
             portfolioField.setHelpText({
                 help: 'Reports every tenant across every property in the selected ' +
                       'portfolio(s). Can be used on its own, or together with Property, ' +
-                      'Accommodation Type or Tenant below to narrow the run further.'
+                      'Accommodation Type or Tenant to narrow the run further.'
             });
 
             var propertyField = form.addField({
@@ -105,7 +105,8 @@ define(['N/ui/serverWidget', 'N/log', './bb1_qpg_prebill_lib'],
             propertyField.setHelpText({
                 help: 'Choose a single property to report every tenant in it. One of ' +
                       'Property, Property Portfolio or Tenant is required - an unfiltered ' +
-                      'run across the whole portfolio is not permitted.'
+                      'run across the whole portfolio is not permitted. Can be combined ' +
+                      'with Portfolio, Accommodation Type or Tenant to narrow further.'
             });
 
             var accommTypeField = form.addField({
@@ -121,12 +122,17 @@ define(['N/ui/serverWidget', 'N/log', './bb1_qpg_prebill_lib'],
                       'Property Portfolio or Tenant.'
             });
 
-            form.addField({
+            var customerField = form.addField({
                 id:        'custparam_customer',
                 type:      serverWidget.FieldType.SELECT,
                 label:     'Tenant',
                 source:    'customer',
                 container: 'custpage_grp_criteria'
+            });
+            customerField.setHelpText({
+                help: 'Choose a single tenant to report that tenant alone. Combine with ' +
+                      'Property, Property Portfolio or Accommodation Type to further narrow ' +
+                      'which of that tenant’s units and invoices are included.'
             });
 
             var toPeriodField = form.addField({

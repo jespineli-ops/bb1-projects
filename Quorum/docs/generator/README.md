@@ -1,11 +1,12 @@
 # BB1 Technical Notes generators - Quorum
 
-Two standalone generators, one per customisation:
+Three standalone generators, one per customisation:
 
 | Script | Output |
 |---|---|
 | `generate_tech_notes.py` | `../BB1_TechNotes_Quorum_TenancySchedule.docx` |
 | `generate_tech_notes_customer_statement.py` | `../BB1_TechNotes_Quorum_CustomerStatement.docx` |
+| `generate_tech_notes_prebilling.py` | `../BB1_TechNotes_Quorum_PreBilling.docx` |
 
 ## Requirements
 
@@ -27,13 +28,14 @@ following the skill's ERD/Process Flow SVG generation steps instead.
 ```
 python3 generate_tech_notes.py
 python3 generate_tech_notes_customer_statement.py
+python3 generate_tech_notes_prebilling.py
 ```
 
 Content (business requirements, component tables, testing steps) is
 hardcoded in each script - update the relevant `add_heading`/`add_body`/
 `add_table` calls directly when the customisation changes, then re-run.
 
-Both scripts share the same low-level oxml helpers (cell shading/borders/
+All three scripts share the same low-level oxml helpers (cell shading/borders/
 margins, `soft_break` for long NetSuite ids, `set_table_grid`). Note in
 particular that `python-docx`'s `add_table()` writes a `w:tblGrid` with
 columns divided evenly, which does **not** automatically follow later
@@ -42,3 +44,12 @@ lay out columns from `w:tblGrid` rather than each cell's own `w:tcW`, which
 would silently undo the intended column widths. `set_table_grid()` rewrites
 the grid to match, and `add_table()` calls it - keep that call if copying
 this pattern into a new generator.
+
+`generate_tech_notes_prebilling.py`'s `add_table()` always runs `soft_break()`
+on every cell's text, not only cells flagged as monospace - a long NetSuite id
+(e.g. `customlist_bb1_building_prop_portfolio`) turns up inside ordinary prose
+columns too (a "Detail" or "To" column), and bleeds off the page there just as
+readily as in a dedicated id column, since Word never wraps on an underscore
+regardless of font. Prefer this version of `add_table()` if copying the
+pattern into a future generator; the two older scripts only soft-break cells
+explicitly marked `mono_cols`.
