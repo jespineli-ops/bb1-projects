@@ -9,6 +9,8 @@
  *
  * Date              Author              Purpose
  * 16-September-2026 Jared Espineli      Initial Release
+ * 18-September-2026 Jared Espineli      Added screen pagination (Previous/Next), ported from
+ *                                       Andile's bb1_qhold_billhist_su.js POC.
  *
  * Copyright (c) 2026 BlueBridge One Business Solutions, All Rights Reserved
  * support@bluebridgeone.com, UK Support: +44 (0)1932 300007 SA Support: +27 (0)10 500 8674
@@ -28,9 +30,15 @@ define(['N/query', 'N/runtime', 'N/render', 'N/file', 'N/url', 'N/format', 'N/re
         var DEFAULT_PERIOD_COUNT  = 4;
         var MAX_PERIOD_COUNT      = 24;
 
-        // Caps a property-wide multi-period run to stay inside the BB1 5-second rule
+        // Caps a property-wide multi-period run to stay inside the BB1 5-second rule.
+        // Screen output is paged instead (see PAGE_SIZE) and is not subject to this cap;
+        // PDF and CSV are unpaged and always cover the whole selection, so this is what
+        // bounds them.
         var MAX_TENANTS           = 250;
         var QUERY_CHUNK_SIZE      = 500;
+
+        // Tenants shown per screen page. PDF and CSV ignore this and take the lot.
+        var PAGE_SIZE             = 50;
 
         // BFO fails with a generic error past this many rows - named here instead
         var MAX_PDF_ROWS          = 4000;
@@ -85,6 +93,7 @@ define(['N/query', 'N/runtime', 'N/render', 'N/file', 'N/url', 'N/format', 'N/re
         var PARAM_RECOVERY_ACCTS  = 'custscript_bb1_qpg_prebill_bdrecaccts_su';
         var PARAM_ALLOC_PREFIX    = 'custscript_bb1_qpg_prebill_allocpfx_su';
         var PARAM_MAX_TENANTS     = 'custscript_bb1_qpg_prebill_maxtenant_su';
+        var PARAM_PAGE_SIZE       = 'custscript_bb1_qpg_prebill_pagesize_su';
 
         var BUCKET_CHARGES        = 'charges';
         var BUCKET_RECEIPTS       = 'receipts';
@@ -115,6 +124,13 @@ define(['N/query', 'N/runtime', 'N/render', 'N/file', 'N/url', 'N/format', 'N/re
 
             if (!filters.mode) {
                 filters.mode = 'screen';
+            }
+
+            // Screen output is paged. PDF and CSV ignore this and take the lot.
+            filters.page = parseInt(request.parameters.custparam_page, 10);
+
+            if (isNaN(filters.page) || filters.page < 1) {
+                filters.page = 1;
             }
 
             // Blank means the month currently being billed - one month ahead of today
@@ -152,12 +168,42 @@ define(['N/query', 'N/runtime', 'N/render', 'N/file', 'N/url', 'N/format', 'N/re
 
             var tenants = getTenantDirectory(filters);
 
-            if (tenants.length > getMaxTenants()) {
+            data.totalTenants = tenants.length;
+            data.pageCount    = 1;
+            data.page         = 1;
+            data.pageStart    = 1;
+
+            if (filters.mode === 'screen') {
+
+                // Only the tenants on this page are assembled, so the queries below
+                // stay the size of a page rather than the whole selection
+                var pageSize = getPageSize();
+
+                data.pageCount = Math.ceil(tenants.length / pageSize);
+
+                if (data.pageCount < 1) {
+                    data.pageCount = 1;
+                }
+
+                data.page = filters.page;
+
+                if (data.page > data.pageCount) {
+                    data.page = data.pageCount;
+                }
+
+                data.pageStart = ((data.page - 1) * pageSize) + 1;
+
+                tenants = tenants.slice(data.pageStart - 1, data.pageStart - 1 + pageSize);
+
+            } else if (tenants.length > getMaxTenants()) {
+
                 data.warnings.push('Showing the first ' + getMaxTenants() + ' tenants of ' +
                                    tenants.length + '. Narrow the selection or run the ' +
                                    'report per tenant to see the rest.');
                 tenants = tenants.slice(0, getMaxTenants());
             }
+
+            data.pageTenants = tenants.length;
 
             // One PDF header, so one subsidiary logo - resolved from the tenants that
             // will actually appear, before any of them are dropped for no activity
@@ -1332,6 +1378,8 @@ define(['N/query', 'N/runtime', 'N/render', 'N/file', 'N/url', 'N/format', 'N/re
                     escapeXml(compactPeriod(data.filters.fromPeriod)) + ' to ' +
                     escapeXml(compactPeriod(data.filters.toPeriod)) + '</h2>';
 
+            html += buildPagingHtml(data);
+
             if (!data.tenants.length) {
                 html += '<p>No tenant activity was found for the selection.</p></div>';
                 return html;
@@ -1346,6 +1394,26 @@ define(['N/query', 'N/runtime', 'N/render', 'N/file', 'N/url', 'N/format', 'N/re
             html += buildSummaryTotalsHtml(data.summary);
 
             html += '</div>';
+
+            return html;
+        }
+
+        // Where the reader is in the tenant list, and what the totals below cover -
+        // only shown once there is more than one page to be on
+        function buildPagingHtml(data) {
+
+            if (data.pageCount < 2) {
+                return '';
+            }
+
+            var pageEnd = (data.pageStart + data.pageTenants) - 1;
+
+            var html = '';
+
+            html += '<div class="warn">Page ' + data.page + ' of ' + data.pageCount +
+                    ' &ndash; tenants ' + data.pageStart + ' to ' + pageEnd + ' of ' +
+                    data.totalTenants + '. Totals on this screen cover this page only; ' +
+                    'the PDF and CSV cover every tenant in the selection.</div>';
 
             return html;
         }
@@ -1988,6 +2056,23 @@ define(['N/query', 'N/runtime', 'N/render', 'N/file', 'N/url', 'N/format', 'N/re
             }
 
             return max;
+        }
+
+        function getPageSize() {
+
+            if (parameterCache.pageSize) {
+                return parameterCache.pageSize;
+            }
+
+            var size = parseInt(runtime.getCurrentScript().getParameter(PARAM_PAGE_SIZE), 10);
+
+            if (isNaN(size) || size < 1) {
+                size = PAGE_SIZE;
+            }
+
+            parameterCache.pageSize = size;
+
+            return size;
         }
 
         function getIdMap(parameterId, fallback) {

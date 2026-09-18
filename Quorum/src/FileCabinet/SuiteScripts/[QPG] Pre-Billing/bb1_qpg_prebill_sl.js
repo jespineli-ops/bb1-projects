@@ -9,6 +9,10 @@
  *
  * Date              Author              Purpose
  * 16-September-2026 Jared Espineli      Initial Release
+ * 18-September-2026 Jared Espineli      Added screen pagination (Previous/Next), ported from
+ *                                       Andile's bb1_qhold_billhist_su.js POC. Cleared the
+ *                                       Latest Billing Period/Number Of Periods defaults so the
+ *                                       selection form loads blank.
  *
  * Copyright (c) 2026 BlueBridge One Business Solutions, All Rights Reserved
  * support@bluebridgeone.com, UK Support: +44 (0)1932 300007 SA Support: +27 (0)10 500 8674
@@ -26,7 +30,7 @@ define(['N/ui/serverWidget', 'N/log', './bb1_qpg_prebill_lib'],
         var _CONST = prebillLib._CONST;
 
         // Bump on every upload - written to the execution log and shown on error
-        var SCRIPT_VERSION = 'v1-2026-09-16';
+        var SCRIPT_VERSION = 'v2-2026-09-18';
 
         //-----------------------------------------------
         //Main entry point
@@ -141,7 +145,6 @@ define(['N/ui/serverWidget', 'N/log', './bb1_qpg_prebill_lib'],
                 label:     'Latest Billing Period',
                 container: 'custpage_grp_criteria'
             });
-            toPeriodField.defaultValue = LIB_FX.periodToDate(LIB_FX.addMonths(LIB_FX.todayYearMonth(), 1));
             toPeriodField.setHelpText({
                 help: 'The most recent billing month to show. Pick any day within that ' +
                       'month - only the month and year are used, the day is ignored. ' +
@@ -154,7 +157,6 @@ define(['N/ui/serverWidget', 'N/log', './bb1_qpg_prebill_lib'],
                 label:     'Number Of Periods',
                 container: 'custpage_grp_criteria'
             });
-            periodsField.defaultValue = _CONST.DEFAULT_PERIOD_COUNT;
             periodsField.setHelpText({
                 help: 'How many billing periods to show, counting back from the latest. ' +
                       'The MRI pre-billing check shows 4. Maximum ' + _CONST.MAX_PERIOD_COUNT + '.'
@@ -207,17 +209,10 @@ define(['N/ui/serverWidget', 'N/log', './bb1_qpg_prebill_lib'],
 
             var form = serverWidget.createForm({ title: 'BB1 ' + _CONST.REPORT_TITLE });
 
-            // A call navigates before NetSuite can append anything that would break a
-            // plain window.location.href assignment; setWindowChanged suppresses the
-            // unsaved-changes prompt on the way out
-            var newSelectionJs =
-                "if(typeof setWindowChanged==='function'){setWindowChanged(window,false);}" +
-                "window.location.assign('" + LIB_FX.suiteletUrl({}) + "')";
-
             form.addButton({
                 id:           'custpage_btn_criteria',
                 label:        'New Selection',
-                functionName: newSelectionJs
+                functionName: navigateTo(LIB_FX.suiteletUrl({}))
             });
 
             form.addButton({
@@ -232,6 +227,24 @@ define(['N/ui/serverWidget', 'N/log', './bb1_qpg_prebill_lib'],
                 functionName: "window.open('" + LIB_FX.suiteletUrl(LIB_FX.overrideMode(data.filters, 'csv')) + "')"
             });
 
+            // Paging runs in the same tab, so it uses the same navigation as New
+            // Selection - a call rather than an assignment
+            if (data.page > 1) {
+                form.addButton({
+                    id:           'custpage_btn_prev',
+                    label:        'Previous',
+                    functionName: navigateTo(pageUrl(data.filters, data.page - 1))
+                });
+            }
+
+            if (data.page < data.pageCount) {
+                form.addButton({
+                    id:           'custpage_btn_next',
+                    label:        'Next',
+                    functionName: navigateTo(pageUrl(data.filters, data.page + 1))
+                });
+            }
+
             var htmlField = form.addField({
                 id:    'custpage_report',
                 type:  serverWidget.FieldType.INLINEHTML,
@@ -241,6 +254,26 @@ define(['N/ui/serverWidget', 'N/log', './bb1_qpg_prebill_lib'],
             htmlField.defaultValue = LIB_FX.buildReportHtml(data);
 
             response.writePage({ pageObject: form });
+        }
+
+        // Same-tab navigation. An assignment such as window.location.href='...'
+        // evaluates its right-hand side first, so anything NetSuite appends to the
+        // handler fails before navigation ever happens and the button does nothing
+        // at all. A call navigates before that can bite. setWindowChanged suppresses
+        // the unsaved-changes prompt the form would otherwise raise on the way out.
+        function navigateTo(target) {
+            return "if(typeof setWindowChanged==='function'){setWindowChanged(window,false);}" +
+                   "window.location.assign('" + target + "')";
+        }
+
+        // The current criteria with a different page number
+        function pageUrl(filters, page) {
+
+            var parameters = LIB_FX.overrideMode(filters, 'screen');
+
+            parameters.custparam_page = page;
+
+            return LIB_FX.suiteletUrl(parameters);
         }
 
         return {
