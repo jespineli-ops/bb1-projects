@@ -229,6 +229,10 @@ define(['N/search', 'N/runtime', 'N/log', 'N/ui/serverWidget', './bb1_qpg_cstmt_
             sublist.addField({id: _FIELDS.RESULTS.SELECT, type: serverWidget.FieldType.CHECKBOX, label: ' '});
 
             sublist.addField({id: _FIELDS.RESULTS.ID, type: serverWidget.FieldType.TEXT, label: 'ID'});
+            // Hidden - carries the real internal id forward for marking/statement generation, since the
+            // visible ID column above displays entityid instead (see _FIELDS.RESULTS.INTERNAL_ID).
+            sublist.addField({id: _FIELDS.RESULTS.INTERNAL_ID, type: serverWidget.FieldType.TEXT, label: 'Internal ID'})
+                .updateDisplayType({displayType: serverWidget.FieldDisplayType.HIDDEN});
             sublist.addField({id: _FIELDS.RESULTS.CUSTOMER, type: serverWidget.FieldType.TEXT, label: 'Customer'});
             sublist.addField({id: _FIELDS.RESULTS.SUBSIDIARY, type: serverWidget.FieldType.TEXT, label: 'Subsidiary'});
             sublist.addField({id: _FIELDS.RESULTS.CURRENCY, type: serverWidget.FieldType.TEXT, label: 'Currency'});
@@ -242,6 +246,9 @@ define(['N/search', 'N/runtime', 'N/log', 'N/ui/serverWidget', './bb1_qpg_cstmt_
                 // join) can leave a stray result row unable to resolve a column, especially at a page boundary.
                 // One bad row shouldn't blank out the whole page, so a failed read just renders blank for that cell.
                 sublist.setSublistValue({id: _FIELDS.RESULTS.ID, line: line, value: safeRead(result, 'getValue', 'entityid')});
+                // result.id is the search result's own internal id, always present - not a column read, so no
+                // safeRead() fallback is needed here.
+                sublist.setSublistValue({id: _FIELDS.RESULTS.INTERNAL_ID, line: line, value: String(result.id)});
                 sublist.setSublistValue({id: _FIELDS.RESULTS.CUSTOMER, line: line, value: safeRead(result, 'getValue', 'altname')});
                 sublist.setSublistValue({id: _FIELDS.RESULTS.SUBSIDIARY, line: line, value: safeRead(result, 'getText', 'subsidiary')});
                 sublist.setSublistValue({id: _FIELDS.RESULTS.CURRENCY, line: line, value: safeRead(result, 'getText', 'currency')});

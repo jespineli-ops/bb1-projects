@@ -61,7 +61,12 @@ define(['N/url'],
             RESULTS: {
                 SUBLIST_ID: 'custpage_qpg_cstmt_gts_results',
                 SELECT:     'custpage_qpg_cstmt_gts_res_select',
+                // Displayed "ID" column - sourced from the customer's entityid (e.g. "C000123"), not the
+                // internal id. Never use this to load/query the customer record - see INTERNAL_ID below.
                 ID:         'custpage_qpg_cstmt_gts_res_id',
+                // Hidden column carrying the customer's real internal id (search result.id), the value every
+                // downstream lookup/query/statement generation must use.
+                INTERNAL_ID: 'custpage_qpg_cstmt_gts_res_internal_id',
                 CUSTOMER:   'custpage_qpg_cstmt_gts_res_customer',
                 SUBSIDIARY: 'custpage_qpg_cstmt_gts_res_subsidiary',
                 CURRENCY:   'custpage_qpg_cstmt_gts_res_currency',
@@ -189,7 +194,7 @@ define(['N/url'],
                 if (!isMarked) continue;
 
                 const customerId = currentRecord.getSublistValue({
-                    sublistId: _FIELDS.RESULTS.SUBLIST_ID, fieldId: _FIELDS.RESULTS.ID, line: line
+                    sublistId: _FIELDS.RESULTS.SUBLIST_ID, fieldId: _FIELDS.RESULTS.INTERNAL_ID, line: line
                 });
 
                 if (customerId) customerIds.push(customerId);
@@ -219,7 +224,7 @@ define(['N/url'],
                 currentRecord.commitLine({sublistId: _FIELDS.RESULTS.SUBLIST_ID});
 
                 thisPageIds.push(String(currentRecord.getSublistValue({
-                    sublistId: _FIELDS.RESULTS.SUBLIST_ID, fieldId: _FIELDS.RESULTS.ID, line: line
+                    sublistId: _FIELDS.RESULTS.SUBLIST_ID, fieldId: _FIELDS.RESULTS.INTERNAL_ID, line: line
                 })));
             }
 
