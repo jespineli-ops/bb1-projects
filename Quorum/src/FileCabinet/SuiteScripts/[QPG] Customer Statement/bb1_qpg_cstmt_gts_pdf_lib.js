@@ -17,6 +17,7 @@
  * 08-September-2026    Jared Espineli      Sourced statement author/queries email/whatsapp from the customer's subsidiary, and added getDefaultPeriodDates() (Statement Date 20th of the month, Start Date 2 months prior) for the Email Statement job's Scheduled deployment.
  * 15-September-2026    Jared Espineli      Restyled the Entity/Property panel to a stacked label/value layout. Also logs the full XML on a render.xmlToPdf failure (chunked, since log.error truncates at 4000 chars) - render.xmlToPdf gives the same generic "unexpected error" message as SuiteQL on failure, so the markup itself needs logging to find a malformed-XML bug.
  * 16-September-2026    Jared Espineli      Added getOpenBalance() so Amount Due/aging reflect the true AR balance (unapplied payments/credits included), with the residual folded into the Current bucket so the aging strip still sums to Amount Due.
+ * 18-September-2026    Jared Espineli      Bank Details table now sourced from the subsidiary's custrecord_statement_banking_details instead of the per-invoice custbody_alf_bank_det_to_print, so it no longer depends on an invoice existing in the statement period.
  *
  * Copyright (c) 2026 BlueBridge One Business Solutions, All Rights Reserved
  * support@bluebridgeone.com, UK Support: +44 (0)1932 300007 SA Support: +27 (0)10 500 8674
@@ -197,7 +198,6 @@ define(['N/query', 'N/search', 'N/record', 'N/error', 'N/render', 'N/file', 'N/u
                 '    t.custbody_alf_subsidiary_address       AS entity_address, ' +
                 '    t.custbody_alf_currency_symbol          AS currency_symbol, ' +
                 '    t.custbody_alf_payment_reference        AS payment_reference, ' +
-                '    t.custbody_alf_bank_det_to_print        AS bank_details, ' +
                 '    BUILTIN.DF(t.cseg_bb1_building)         AS property, ' +
                 '    BUILTIN.DF(t.cseg_bb1_unit)             AS unit_no, ' +
                 '    (SELECT MAX(tl.subsidiary) FROM transactionline tl ' +
@@ -226,7 +226,8 @@ define(['N/query', 'N/search', 'N/record', 'N/error', 'N/render', 'N/file', 'N/u
                     queries_email: entityFields.queries_email,
                     queries_whatsapp: entityFields.queries_whatsapp,
                     terms_and_conditions: entityFields.terms_and_conditions,
-                    company_logo_url: entityFields.company_logo_url
+                    company_logo_url: entityFields.company_logo_url,
+                    bank_details: entityFields.bank_details
                 };
             }
 
@@ -237,6 +238,7 @@ define(['N/query', 'N/search', 'N/record', 'N/error', 'N/render', 'N/file', 'N/u
             headerRow.recipient_vat_no = entityFields.recipient_vat_no;
             headerRow.recipient_reg_no = entityFields.recipient_reg_no;
             headerRow.bank_guarantee = entityFields.bank_guarantee;
+            headerRow.bank_details = entityFields.bank_details;
             headerRow.deposit = entityFields.deposit;
             headerRow.entity_vat_no = entityFields.entity_vat_no;
             headerRow.entity_reg_no = entityFields.entity_reg_no;
@@ -333,7 +335,11 @@ define(['N/query', 'N/search', 'N/record', 'N/error', 'N/render', 'N/file', 'N/u
                 queries_whatsapp: '',
                 // Subsidiary-level terms/payment instructions, printed where the old freeform bank details
                 // block used to sit, beside the totals box.
-                terms_and_conditions: ''
+                terms_and_conditions: '',
+                // Subsidiary's own banking details (custrecord_statement_banking_details) - replaces the old
+                // per-invoice custbody_alf_bank_det_to_print as the source for the Bank Details table, same
+                // "Label: Value" free-text format (see BANK_DETAIL_LABELS/parseBankDetails below).
+                bank_details: ''
             };
 
             let subsidiaryId = subsidiaryFromInvoice || null;
@@ -400,7 +406,8 @@ define(['N/query', 'N/search', 'N/record', 'N/error', 'N/render', 'N/file', 'N/u
                     '    s.custrecord_bb1_cus_state_email_template AS email_template_id, ' +
                     '    s.custrecord_bb1_queries_email           AS queries_email, ' +
                     '    s.custrecord_bb1_queries_whatsapp        AS queries_whatsapp, ' +
-                    '    s.custrecord_bb1_termsandconditions      AS terms_and_conditions ' +
+                    '    s.custrecord_bb1_termsandconditions      AS terms_and_conditions, ' +
+                    '    s.custrecord_statement_banking_details   AS bank_details ' +
                     'FROM subsidiary s ' +
                     `WHERE s.id = ${assertId(subsidiaryId)}`;
 
@@ -417,6 +424,7 @@ define(['N/query', 'N/search', 'N/record', 'N/error', 'N/render', 'N/file', 'N/u
                     values.queries_email = rows[0].queries_email || '';
                     values.queries_whatsapp = rows[0].queries_whatsapp || '';
                     values.terms_and_conditions = rows[0].terms_and_conditions || '';
+                    values.bank_details = rows[0].bank_details || '';
                 }
 
             } catch (e) {
@@ -898,7 +906,7 @@ define(['N/query', 'N/search', 'N/record', 'N/error', 'N/render', 'N/file', 'N/u
             return isNaN(number) ? '' : number.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
         }
 
-        // Maps a "Label: Value" line from custbody_alf_bank_det_to_print onto a Bank Details table column -
+        // Maps a "Label: Value" line from the subsidiary's custrecord_statement_banking_details onto a Bank Details table column -
         // the field's own labels (left) don't match the printed column headers (right, see buildBankDetailsSection).
         const BANK_DETAIL_LABELS = {
             'account name': 'accountName',
@@ -1152,11 +1160,11 @@ define(['N/query', 'N/search', 'N/record', 'N/error', 'N/render', 'N/file', 'N/u
         `;
 
         //-----------------------------------------------
-        //Bank details table - Account Name/Bank/Branch No./Account No., parsed from custbody_alf_bank_det_to_print
-        //(whose own field labels are Account Name/Bank Name/Branch/Account Number - see BANK_DETAIL_LABELS),
-        //plus a highlighted Payment Reference column from the customer's own Entity ID. The clickable payment
-        //logo (subsidiary's custrecord_bb1_peach_payment_image, linking to custrecord_bb1_peach_payment_url)
-        //prints below, left-aligned.
+        //Bank details table - Account Name/Bank/Branch No./Account No., parsed from the subsidiary's
+        //custrecord_statement_banking_details (whose own field labels are Account Name/Bank Name/Branch/
+        //Account Number - see BANK_DETAIL_LABELS), plus a highlighted Payment Reference column from the
+        //customer's own Entity ID. The clickable payment logo (subsidiary's custrecord_bb1_peach_payment_image,
+        //linking to custrecord_bb1_peach_payment_url) prints below, left-aligned.
         //-----------------------------------------------
         const buildBankDetailsSection = (statement) => {
             const bank = parseBankDetails(statement.header.bank_details);
