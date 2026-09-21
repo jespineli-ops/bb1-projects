@@ -13,6 +13,9 @@
  *                                       Andile's bb1_qhold_billhist_su.js POC. Cleared the
  *                                       Latest Billing Period/Number Of Periods defaults so the
  *                                       selection form loads blank.
+ * 21-September-2026 Jared Espineli      Added Layout (Transactions / Compare Periods), Only
+ *                                       Show Variances and Variance Tolerance % options, ported
+ *                                       from Andile's bb1_qhold_billhist_su.js POC.
  *
  * Copyright (c) 2026 BlueBridge One Business Solutions, All Rights Reserved
  * support@bluebridgeone.com, UK Support: +44 (0)1932 300007 SA Support: +27 (0)10 500 8674
@@ -30,7 +33,7 @@ define(['N/ui/serverWidget', 'N/log', './bb1_qpg_prebill_lib'],
         var _CONST = prebillLib._CONST;
 
         // Bump on every upload - written to the execution log and shown on error
-        var SCRIPT_VERSION = 'v2-2026-09-18';
+        var SCRIPT_VERSION = 'v3-2026-09-21';
 
         //-----------------------------------------------
         //Main entry point
@@ -195,6 +198,49 @@ define(['N/ui/serverWidget', 'N/log', './bb1_qpg_prebill_lib'],
                 container: 'custpage_grp_options'
             });
             zeroField.defaultValue = 'F';
+
+            var viewField = form.addField({
+                id:        'custparam_view',
+                type:      serverWidget.FieldType.SELECT,
+                label:     'Layout',
+                container: 'custpage_grp_options'
+            });
+            viewField.addSelectOption({ value: 'detail',  text: 'Transactions' });
+            viewField.addSelectOption({ value: 'compare', text: 'Compare Periods' });
+            viewField.defaultValue = 'detail';
+            viewField.setHelpText({
+                help: 'Transactions: every line in date order under its period, as MRI ' +
+                      'prints it. Compare Periods: one row per allocation and one column ' +
+                      'per period, with the movement against the previous period and a ' +
+                      'flag on anything new, changed, or no longer billing.'
+            });
+
+            var varOnlyField = form.addField({
+                id:        'custparam_varonly',
+                type:      serverWidget.FieldType.CHECKBOX,
+                label:     'Only Show Variances',
+                container: 'custpage_grp_options'
+            });
+            varOnlyField.defaultValue = 'F';
+            varOnlyField.setHelpText({
+                help: 'Compare Periods layout only. Unticked: every allocation is listed ' +
+                      'with its amount for each period, whether it changed or not. Ticked: ' +
+                      'only the rows carrying a flag are listed. Period totals are the full ' +
+                      'totals either way, so they will not add up to the rows on screen.'
+            });
+
+            var toleranceField = form.addField({
+                id:        'custparam_tolerance',
+                type:      serverWidget.FieldType.FLOAT,
+                label:     'Variance Tolerance %',
+                container: 'custpage_grp_options'
+            });
+            toleranceField.defaultValue = 0;
+            toleranceField.setHelpText({
+                help: 'Movements smaller than this percentage are not flagged. Useful for ' +
+                      'letting small escalations through quietly - set 5 to see only ' +
+                      'movements of 5% or more. Zero flags every difference.'
+            });
 
             form.addSubmitButton({ label: 'Run Report' });
 

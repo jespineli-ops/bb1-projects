@@ -11,6 +11,9 @@
  * 16-September-2026 Jared Espineli      Initial Release
  * 18-September-2026 Jared Espineli      Added screen pagination (Previous/Next), ported from
  *                                       Andile's bb1_qhold_billhist_su.js POC.
+ * 21-September-2026 Jared Espineli      Added the Compare Periods layout (with Only Show
+ *                                       Variances and Variance Tolerance %), ported from
+ *                                       Andile's bb1_qhold_billhist_su.js POC.
  *
  * Copyright (c) 2026 BlueBridge One Business Solutions, All Rights Reserved
  * support@bluebridgeone.com, UK Support: +44 (0)1932 300007 SA Support: +27 (0)10 500 8674
@@ -121,6 +124,12 @@ define(['N/query', 'N/runtime', 'N/render', 'N/file', 'N/url', 'N/format', 'N/re
             filters.showZero      = request.parameters.custparam_showzero === 'T';
             filters.showAnalysis  = request.parameters.custparam_analysis !== 'F';
             filters.showLines     = request.parameters.custparam_lines !== 'F';
+            filters.view          = request.parameters.custparam_view;
+            filters.variancesOnly = request.parameters.custparam_varonly === 'T';
+
+            if (!filters.view) {
+                filters.view = 'detail';
+            }
 
             if (!filters.mode) {
                 filters.mode = 'screen';
@@ -131,6 +140,14 @@ define(['N/query', 'N/runtime', 'N/render', 'N/file', 'N/url', 'N/format', 'N/re
 
             if (isNaN(filters.page) || filters.page < 1) {
                 filters.page = 1;
+            }
+
+            // Percentage below which a movement is treated as noise. Zero means
+            // every difference is flagged.
+            filters.tolerancePct = parseFloat(request.parameters.custparam_tolerance);
+
+            if (isNaN(filters.tolerancePct) || filters.tolerancePct < 0) {
+                filters.tolerancePct = 0;
             }
 
             // Blank means the month currently being billed - one month ahead of today
@@ -935,6 +952,7 @@ define(['N/query', 'N/runtime', 'N/render', 'N/file', 'N/url', 'N/format', 'N/re
                 row.document       = '';
                 row.allocation     = cleanAllocation(line.allocation);
                 row.remarks        = line.remarks;
+                row.rate           = toNumber(line.rate);
                 row.exclusive      = toNumber(line.exclusive);
                 row.tax            = toNumber(line.tax);
                 row.inclusive      = toNumber(line.inclusive);
@@ -1348,6 +1366,383 @@ define(['N/query', 'N/runtime', 'N/render', 'N/file', 'N/url', 'N/format', 'N/re
         }
 
         //-----------------------------------------------
+        //Period comparison
+        //Layout option "Compare Periods": one row per
+        //allocation, one column per period, with the
+        //movement against the previous period and a flag
+        //on anything new, changed, or no longer billing
+        //-----------------------------------------------
+        function buildComparisonGrid(periodBlocks, periodKeys, filters) {
+
+            var index = {};
+            var order = [];
+
+            for (var i = 0; i < periodBlocks.length; i++) {
+
+                var block = periodBlocks[i];
+
+                for (var j = 0; j < block.rows.length; j++) {
+
+                    var row = block.rows[j];
+                    var key = String(row.allocation);
+
+                    if (!key) {
+                        key = '(unallocated)';
+                    }
+
+                    if (!index[key]) {
+                        index[key] = { allocation: key, byPeriod: {}, ratesByPeriod: {} };
+                        order.push(key);
+                    }
+
+                    if (!index[key].byPeriod[block.period]) {
+                        index[key].byPeriod[block.period] = 0;
+                    }
+
+                    index[key].byPeriod[block.period] += toNumber(row.inclusive);
+
+                    // Distinct unit rates behind the amount. Two lines at 500 total
+                    // the same as one at 1000, so the amount alone will not show a
+                    // rate that has halved.
+                    if (row.rate) {
+
+                        if (!index[key].ratesByPeriod[block.period]) {
+                            index[key].ratesByPeriod[block.period] = {};
+                        }
+
+                        index[key].ratesByPeriod[block.period][toNumber(row.rate).toFixed(2)] = true;
+                    }
+                }
+            }
+
+            order.sort(function (a, b) {
+
+                var left  = a.toLowerCase();
+                var right = b.toLowerCase();
+
+                if (left < right) {
+                    return -1;
+                }
+
+                if (left > right) {
+                    return 1;
+                }
+
+                return 0;
+            });
+
+            var grid = { rows: [], totals: [], flagged: 0, hidden: 0 };
+
+            for (var k = 0; k < periodKeys.length; k++) {
+                grid.totals.push(0);
+            }
+
+            for (var m = 0; m < order.length; m++) {
+
+                var entry  = index[order[m]];
+                var values = [];
+                var rates  = [];
+
+                for (var n = 0; n < periodKeys.length; n++) {
+
+                    var amount = toNumber(entry.byPeriod[periodKeys[n]]);
+
+                    values.push(amount);
+                    grid.totals[n] += amount;
+                    rates.push(rateKey(entry.ratesByPeriod[periodKeys[n]]));
+                }
+
+                var gridRow = { allocation: entry.allocation, values: values, rates: rates };
+
+                decorateComparisonRow(gridRow, periodKeys, filters);
+
+                if (gridRow.status) {
+                    grid.flagged++;
+                }
+
+                grid.rows.push(gridRow);
+            }
+
+            // Totals stay the full period totals whether rows are filtered or not,
+            // so a hidden row never changes the figure they foot to
+            var totalsRow = { allocation: '', values: grid.totals, rates: [] };
+
+            decorateComparisonRow(totalsRow, periodKeys, filters);
+
+            grid.totalVariance = totalsRow.variance;
+
+            if (filters && filters.variancesOnly) {
+                grid = filterToVariances(grid);
+            }
+
+            return grid;
+        }
+
+        // Distinct rates for one allocation in one period, as a stable string
+        function rateKey(rateSet) {
+
+            if (!rateSet) {
+                return '';
+            }
+
+            var rates = [];
+
+            for (var rate in rateSet) {
+                rates.push(rate);
+            }
+
+            rates.sort();
+
+            return rates.join(' / ');
+        }
+
+        // Drop the unchanged rows, keeping a count so the report can say how
+        // many it is not showing
+        function filterToVariances(grid) {
+
+            var kept = [];
+
+            for (var i = 0; i < grid.rows.length; i++) {
+
+                if (grid.rows[i].status) {
+                    kept.push(grid.rows[i]);
+                }
+            }
+
+            grid.hidden = grid.rows.length - kept.length;
+            grid.rows   = kept;
+
+            return grid;
+        }
+
+        // Detection looks across the whole window, not just the last two columns -
+        // a charge that dropped in an early period and held through since shows no
+        // movement month on month but is still wrong. "Not billed" is the one that
+        // matters most: billed before, absent now.
+        function decorateComparisonRow(row, periodKeys, filters) {
+
+            var count = row.values.length;
+
+            row.variance    = 0;
+            row.variancePct = 0;
+            row.status      = '';
+            row.changedIn   = '';
+
+            if (count < 2) {
+                return;
+            }
+
+            var last         = row.values[count - 1];
+            var lastIsZero   = Math.abs(last) < RECONCILE_TOLERANCE;
+            var priorsZero   = true;
+            var priorsDiffer = false;
+
+            for (var i = 0; i < count - 1; i++) {
+
+                if (Math.abs(row.values[i]) > RECONCILE_TOLERANCE) {
+                    priorsZero = false;
+                }
+
+                if (Math.abs(row.values[i] - last) > RECONCILE_TOLERANCE) {
+                    priorsDiffer = true;
+                }
+            }
+
+            // The most recent period where the amount moved, and the level it moved
+            // from - so the movement shown is the size of the change itself, even
+            // when it happened two periods ago and then held
+            var changeIndex = -1;
+
+            for (var j = 1; j < count; j++) {
+
+                if (Math.abs(row.values[j] - row.values[j - 1]) > RECONCILE_TOLERANCE) {
+                    changeIndex = j;
+                }
+            }
+
+            if (changeIndex > 0) {
+
+                var baseline = row.values[changeIndex - 1];
+
+                row.variance  = row.values[changeIndex] - baseline;
+                row.changedIn = compactPeriod(periodKeys[changeIndex]);
+
+                if (Math.abs(baseline) > RECONCILE_TOLERANCE) {
+                    row.variancePct = (row.variance / Math.abs(baseline)) * 100;
+                }
+            }
+
+            // Below the tolerance the movement is noise and stays unflagged
+            if (withinTolerance(row, filters)) {
+                return;
+            }
+
+            if (lastIsZero && !priorsZero) {
+                row.status = 'Not billed';
+                return;
+            }
+
+            if (priorsZero && !lastIsZero) {
+                row.status = 'New';
+                return;
+            }
+
+            if (priorsDiffer) {
+                row.status = 'Changed';
+                return;
+            }
+
+            // Amount steady but the unit rate behind it moved - a halved rate on a
+            // doubled quantity nets out and would otherwise pass silently
+            if (rateMoved(row)) {
+                row.status = 'Rate changed';
+            }
+        }
+
+        function withinTolerance(row, filters) {
+
+            if (!filters || !filters.tolerancePct) {
+                return false;
+            }
+
+            // A charge appearing or disappearing is always material, whatever the
+            // tolerance is set to
+            if (!row.variancePct) {
+                return false;
+            }
+
+            if (Math.abs(row.variancePct) >= filters.tolerancePct) {
+                return false;
+            }
+
+            return true;
+        }
+
+        // Did the set of unit rates change between the last two periods that
+        // actually carried a rate?
+        function rateMoved(row) {
+
+            var populated = [];
+
+            for (var i = 0; i < row.rates.length; i++) {
+
+                if (row.rates[i]) {
+                    populated.push(row.rates[i]);
+                }
+            }
+
+            if (populated.length < 2) {
+                return false;
+            }
+
+            return populated[populated.length - 1] !== populated[populated.length - 2];
+        }
+
+        // Every tenant's periods flattened into one grid, for spotting a systemic
+        // miss - a charge that stopped billing across the whole selection
+        function buildPortfolioGrid(tenants, periodKeys, filters) {
+
+            var blocks = [];
+
+            for (var i = 0; i < tenants.length; i++) {
+
+                var periods = tenants[i].periods;
+
+                for (var j = 0; j < periods.length; j++) {
+                    blocks.push(periods[j]);
+                }
+            }
+
+            return buildComparisonGrid(blocks, periodKeys, filters);
+        }
+
+        // The grid markup is valid in both the inline HTML field and the BFO
+        // document, so screen and PDF share one builder
+        function buildComparisonHtml(grid, periodKeys, filters) {
+
+            var html = '';
+            var i    = 0;
+
+            html += '<table>';
+            html += '<thead><tr>';
+            html += '<th width="22%">Allocation</th>';
+
+            for (i = 0; i < periodKeys.length; i++) {
+                html += '<th class="num">' + escapeXml(compactPeriod(periodKeys[i])) + '</th>';
+            }
+
+            html += '<th class="num">Movement</th>';
+            html += '<th class="num">%</th>';
+            html += '<th>Changed In</th>';
+            html += '<th>Flag</th>';
+            html += '</tr></thead>';
+            html += '<tbody>';
+
+            for (i = 0; i < grid.rows.length; i++) {
+                html += comparisonRowHtml(grid.rows[i], 'detail');
+            }
+
+            var totalsRow = {
+                allocation:  'Total',
+                values:      grid.totals,
+                variance:    grid.totalVariance,
+                variancePct: 0,
+                changedIn:   '',
+                status:      ''
+            };
+
+            html += comparisonRowHtml(totalsRow, 'total');
+
+            // Filtering hides rows but never changes the totals, so say what is
+            // missing rather than leave the two looking inconsistent
+            if (grid.hidden) {
+                html += '<tr class="detail"><td colspan="' + (periodKeys.length + 5) + '">' +
+                        grid.hidden + ' unchanged allocation(s) hidden. Totals are the full ' +
+                        'period totals.</td></tr>';
+            }
+
+            html += '</tbody></table>';
+
+            return html;
+        }
+
+        function comparisonRowHtml(row, rowClass) {
+
+            var html = '';
+
+            html += '<tr class="' + rowClass + '">';
+            html += '<td>' + escapeXml(row.allocation) + '</td>';
+
+            for (var i = 0; i < row.values.length; i++) {
+                html += '<td class="num">' + formatAmount(row.values[i]) + '</td>';
+            }
+
+            html += '<td class="num">' + formatAmount(row.variance) + '</td>';
+            html += '<td class="num">' + formatPercent(row.variancePct) + '</td>';
+            html += '<td>' + escapeXml(row.changedIn) + '</td>';
+            html += '<td>' + escapeXml(row.status) + '</td>';
+            html += '</tr>';
+
+            return html;
+        }
+
+        // One decimal with a sign, blank when there is no movement
+        function formatPercent(value) {
+
+            var number = parseFloat(value);
+
+            if (isNaN(number) || number === 0) {
+                return '';
+            }
+
+            if (number > 0) {
+                return '+' + number.toFixed(1) + '%';
+            }
+
+            return number.toFixed(1) + '%';
+        }
+
+        //-----------------------------------------------
         //Screen rendering (report content only)
         //-----------------------------------------------
         function buildReportHtml(data) {
@@ -1389,6 +1784,12 @@ define(['N/query', 'N/runtime', 'N/render', 'N/file', 'N/url', 'N/format', 'N/re
 
             for (var j = 0; j < data.tenants.length; j++) {
                 html += buildTenantHtml(data.tenants[j], data.filters);
+            }
+
+            if (data.filters.view === 'compare' && data.tenants.length > 1) {
+                html += '<h2>All Tenants</h2>';
+                html += buildComparisonHtml(buildPortfolioGrid(data.tenants, data.filters.periods, data.filters),
+                                            data.filters.periods, data.filters);
             }
 
             html += buildSummaryTotalsHtml(data.summary);
@@ -1527,7 +1928,22 @@ define(['N/query', 'N/runtime', 'N/render', 'N/file', 'N/url', 'N/format', 'N/re
                     escapeXml(tenant.property) + ' &nbsp;|&nbsp; ' +
                     escapeXml(tenant.customer_name) + ' &nbsp;|&nbsp; Unit ' +
                     escapeXml(tenant.unit_no) + '</td></tr>';
+            html += '</table>';
 
+            // Compare view replaces the transaction listing entirely
+            if (filters.view === 'compare') {
+
+                html += buildComparisonHtml(buildComparisonGrid(tenant.periods, filters.periods, filters),
+                                            filters.periods, filters);
+
+                if (filters.showAnalysis) {
+                    html += buildMovementHtml(tenant);
+                }
+
+                return html;
+            }
+
+            html += '<table>';
             html += '<tr>';
             html += '<th width="10%">Date</th>';
             html += '<th width="13%">Document</th>';
@@ -1781,6 +2197,12 @@ define(['N/query', 'N/runtime', 'N/render', 'N/file', 'N/url', 'N/format', 'N/re
                 xml += buildTenantXml(data.tenants[j], data.filters);
             }
 
+            if (data.filters.view === 'compare' && data.tenants.length > 1) {
+                xml += '<table class="tenanthead"><tr><td>All Tenants</td></tr></table>';
+                xml += buildComparisonHtml(buildPortfolioGrid(data.tenants, data.filters.periods, data.filters),
+                                           data.filters.periods, data.filters);
+            }
+
             xml += buildSummaryTotalsXml(data.summary);
 
             xml += '</body></pdf>';
@@ -1831,6 +2253,19 @@ define(['N/query', 'N/runtime', 'N/render', 'N/file', 'N/url', 'N/format', 'N/re
                    escapeXml(tenant.property) + ' | ' +
                    escapeXml(tenant.customer_name) + ' | Unit ' +
                    escapeXml(tenant.unit_no) + '</td></tr></table>';
+
+            // Compare view replaces the transaction listing entirely
+            if (filters.view === 'compare') {
+
+                xml += buildComparisonHtml(buildComparisonGrid(tenant.periods, filters.periods, filters),
+                                           filters.periods, filters);
+
+                if (filters.showAnalysis) {
+                    xml += buildMovementXml(tenant);
+                }
+
+                return xml;
+            }
 
             xml += '<table>';
             xml += '<thead><tr>';
@@ -1937,6 +2372,88 @@ define(['N/query', 'N/runtime', 'N/render', 'N/file', 'N/url', 'N/format', 'N/re
 
             var csv = '';
 
+            if (data.filters.view === 'compare') {
+                csv = buildComparisonCsv(data);
+            } else {
+                csv = buildDetailCsv(data);
+            }
+
+            var csvFile = file.create({
+                name:     'Billing_History_' + compactPeriod(data.filters.fromPeriod) + '_' +
+                          compactPeriod(data.filters.toPeriod) + '.csv',
+                fileType: file.Type.CSV,
+                contents: csv
+            });
+
+            response.writeFile({ file: csvFile, isInline: false });
+        }
+
+        // One row per tenant and allocation, one column per period, so the whole
+        // selection can be sorted on Flag or Movement in a spreadsheet
+        function buildComparisonCsv(data) {
+
+            var csv     = '';
+            var periods = data.filters.periods;
+            var header  = ['Property', 'Tenant', 'Unit', 'Allocation'];
+            var i       = 0;
+
+            for (i = 0; i < periods.length; i++) {
+                header.push(compactPeriod(periods[i]));
+            }
+
+            header.push('Movement');
+            header.push('Movement %');
+            header.push('Changed In');
+            header.push('Flag');
+
+            csv += csvRow(header);
+
+            for (i = 0; i < data.tenants.length; i++) {
+
+                var tenant = data.tenants[i];
+                var grid   = buildComparisonGrid(tenant.periods, periods, data.filters);
+
+                for (var j = 0; j < grid.rows.length; j++) {
+                    csv += comparisonCsvRow(tenant.property, tenant.customer_name,
+                                            tenant.unit_no, grid.rows[j]);
+                }
+
+                var totalsRow = {
+                    allocation:  'Total',
+                    values:      grid.totals,
+                    variance:    grid.totalVariance,
+                    variancePct: 0,
+                    changedIn:   '',
+                    status:      ''
+                };
+
+                csv += comparisonCsvRow(tenant.property, tenant.customer_name,
+                                        tenant.unit_no, totalsRow);
+            }
+
+            return csv;
+        }
+
+        function comparisonCsvRow(property, tenantName, unit, row) {
+
+            var values = [property, tenantName, unit, row.allocation];
+
+            for (var i = 0; i < row.values.length; i++) {
+                values.push(row.values[i]);
+            }
+
+            values.push(row.variance);
+            values.push(row.variancePct);
+            values.push(row.changedIn);
+            values.push(row.status);
+
+            return csvRow(values);
+        }
+
+        function buildDetailCsv(data) {
+
+            var csv = '';
+
             csv += 'Property,Tenant,Unit,Period,Date,Document,Allocation,Remarks,' +
                    'Exclusive,Tax,Inclusive,Classification,Charge Type,Charge Status,Discount\n';
 
@@ -1972,14 +2489,7 @@ define(['N/query', 'N/runtime', 'N/render', 'N/file', 'N/url', 'N/format', 'N/re
 
             csv += buildSummaryCsv(data.summary);
 
-            var csvFile = file.create({
-                name:     'Billing_History_' + compactPeriod(data.filters.fromPeriod) + '_' +
-                          compactPeriod(data.filters.toPeriod) + '.csv',
-                fileType: file.Type.CSV,
-                contents: csv
-            });
-
-            response.writeFile({ file: csvFile, isInline: false });
+            return csv;
         }
 
         function buildSummaryCsv(summary) {
@@ -2207,6 +2717,18 @@ define(['N/query', 'N/runtime', 'N/render', 'N/file', 'N/url', 'N/format', 'N/re
 
             if (!filters.showLines) {
                 parameters.custparam_lines = 'F';
+            }
+
+            if (filters.view) {
+                parameters.custparam_view = filters.view;
+            }
+
+            if (filters.variancesOnly) {
+                parameters.custparam_varonly = 'T';
+            }
+
+            if (filters.tolerancePct) {
+                parameters.custparam_tolerance = filters.tolerancePct;
             }
 
             return parameters;
