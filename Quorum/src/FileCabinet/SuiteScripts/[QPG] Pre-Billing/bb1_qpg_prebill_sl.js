@@ -16,6 +16,8 @@
  * 21-September-2026 Jared Espineli      Added Layout (Transactions / Compare Periods), Only
  *                                       Show Variances and Variance Tolerance % options, ported
  *                                       from Andile's bb1_qhold_billhist_su.js POC.
+ * 22-September-2026 Jared Espineli      Restored the Latest Billing Period (next month) and
+ *                                       Number Of Periods (4) defaults on the selection form.
  *
  * Copyright (c) 2026 BlueBridge One Business Solutions, All Rights Reserved
  * support@bluebridgeone.com, UK Support: +44 (0)1932 300007 SA Support: +27 (0)10 500 8674
@@ -148,10 +150,11 @@ define(['N/ui/serverWidget', 'N/log', './bb1_qpg_prebill_lib'],
                 label:     'Latest Billing Period',
                 container: 'custpage_grp_criteria'
             });
+            toPeriodField.defaultValue = LIB_FX.periodToDate(LIB_FX.addMonths(LIB_FX.todayYearMonth(), 1));
             toPeriodField.setHelpText({
                 help: 'The most recent billing month to show. Pick any day within that ' +
                       'month - only the month and year are used, the day is ignored. ' +
-                      'Defaults to the month currently being billed.'
+                      'Defaults to next month.'
             });
 
             var periodsField = form.addField({
@@ -160,9 +163,10 @@ define(['N/ui/serverWidget', 'N/log', './bb1_qpg_prebill_lib'],
                 label:     'Number Of Periods',
                 container: 'custpage_grp_criteria'
             });
+            periodsField.defaultValue = _CONST.DEFAULT_PERIOD_COUNT;
             periodsField.setHelpText({
                 help: 'How many billing periods to show, counting back from the latest. ' +
-                      'The MRI pre-billing check shows 4. Maximum ' + _CONST.MAX_PERIOD_COUNT + '.'
+                      'Defaults to ' + _CONST.DEFAULT_PERIOD_COUNT + '. Maximum ' + _CONST.MAX_PERIOD_COUNT + '.'
             });
 
             form.addFieldGroup({ id: 'custpage_grp_options', label: 'Options' });
