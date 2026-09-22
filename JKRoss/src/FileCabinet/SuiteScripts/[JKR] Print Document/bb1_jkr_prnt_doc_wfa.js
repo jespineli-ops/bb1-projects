@@ -10,12 +10,14 @@
  * Copyright (c) 2022 BlueBridge One Business Solutions, All Rights Reserved [Replace appropriately]
  * support@bluebridgeone.com, +44 (0)1932 300007
  */
-define(['N/url', '/SuiteApps/com.bluebridgeonecouk.qztray/bb1_qz_lib_public'],
+define(['N/runtime, ''N/url', '/SuiteApps/com.bluebridgeonecouk.qztray/bb1_qz_lib_public'],
     /**
  * @param{url} url
  * @param{bb1qz} bb1qz
  */
-    (url, bb1qz) => {
+    (runtime, url, bb1qz) => {
+        const THIS_SCRIPT = runtime.getCurrentScript();
+
         /**
          * Defines the WorkflowAction script trigger point.
          * @param {Object} scriptContext
@@ -43,7 +45,7 @@ define(['N/url', '/SuiteApps/com.bluebridgeonecouk.qztray/bb1_qz_lib_public'],
 
             log.debug('Redirect Url', redirectUrl);
 
-            var formNumber = newRecord.getValue({fieldId: 'customform'});
+            var formNumber = THIS_SCRIPT.getParameter('custscript_bb1_jkr_auto_print_cust_form');
 
             log.debug('Form Number', formNumber);
 
@@ -56,7 +58,7 @@ define(['N/url', '/SuiteApps/com.bluebridgeonecouk.qztray/bb1_qz_lib_public'],
 
             bb1qz.AddJobToQueue(
                 5,
-                'customscript_bb1_qz_record_plugin',
+                'customscript_bb1_qz_pi_record',
                 'Document Printing',
                 jobData,
                 null
