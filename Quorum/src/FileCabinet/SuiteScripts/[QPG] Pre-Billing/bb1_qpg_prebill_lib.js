@@ -14,6 +14,11 @@
  * 21-September-2026 Jared Espineli      Added the Compare Periods layout (with Only Show
  *                                       Variances and Variance Tolerance %), ported from
  *                                       Andile's bb1_qhold_billhist_su.js POC.
+ * 23-September-2026 Jared Espineli      Raised MAX_TENANTS (250 -> 5000) and MAX_PDF_ROWS
+ *                                       (4000 -> 20000) to match Andile's
+ *                                       bb1_qhold_billhist_su.js POC, so PDF/CSV exports
+ *                                       cover every tenant in the selection instead of
+ *                                       silently cutting off at the first 250.
  *
  * Copyright (c) 2026 BlueBridge One Business Solutions, All Rights Reserved
  * support@bluebridgeone.com, UK Support: +44 (0)1932 300007 SA Support: +27 (0)10 500 8674
@@ -33,18 +38,23 @@ define(['N/query', 'N/runtime', 'N/render', 'N/file', 'N/url', 'N/format', 'N/re
         var DEFAULT_PERIOD_COUNT  = 4;
         var MAX_PERIOD_COUNT      = 24;
 
-        // Caps a property-wide multi-period run to stay inside the BB1 5-second rule.
-        // Screen output is paged instead (see PAGE_SIZE) and is not subject to this cap;
-        // PDF and CSV are unpaged and always cover the whole selection, so this is what
-        // bounds them.
-        var MAX_TENANTS           = 250;
+        // Guard rails. A property-wide run over many periods is the one thing that will
+        // push this Suitelet past the BB1 5-second rule, so the row and tenant counts
+        // are capped and the user is told when a cap bites. Screen output is paged;
+        // PDF and CSV always cover every tenant in the selection. The ceiling below is
+        // a safety limit on the exports only.
+        var MAX_TENANTS           = 5000;
         var QUERY_CHUNK_SIZE      = 500;
 
         // Tenants shown per screen page. PDF and CSV ignore this and take the lot.
         var PAGE_SIZE             = 50;
 
-        // BFO fails with a generic error past this many rows - named here instead
-        var MAX_PDF_ROWS          = 4000;
+        // Displayed rows above which the BFO renderer is refused outright. Past this
+        // the render fails with a generic error that gives the user nothing to act on,
+        // so the report names the cause itself instead. Raised to cover a whole
+        // property; BFO is still the limiting factor, and beyond a few thousand rows
+        // the CSV is the dependable export.
+        var MAX_PDF_ROWS          = 20000;
 
         // Above this, an invoice/lines mismatch is shown as its own row, not absorbed
         var RECONCILE_TOLERANCE   = 0.01;
