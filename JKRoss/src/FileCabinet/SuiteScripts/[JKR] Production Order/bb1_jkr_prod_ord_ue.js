@@ -3,8 +3,8 @@
  *
  * Teamwork task: P102821 - Production Order
  *
- * Date              Author              Purpose
- * 23-September-2026  Jared Espineli     Initial Release
+ * Date                Author              Purpose
+ * 23-September-2026   Jared Espineli     Initial Release
  *
  * Copyright (c) 2026 BlueBridge One Business Solutions, All Rights Reserved
  * support@bluebridgeone.com, UK Support: +44 (0)1932 300007 SA Support: +27 (0)10 500 8674
@@ -23,7 +23,7 @@ define(['N/record', 'N/runtime', 'N/error', './bb1_jkr_prod_ord_helper_lib'],
          * @param {string} scriptContext.type
          */
         function afterSubmit(scriptContext) {
-            log.debug('BB1 WF Trigger Test', 'afterSubmit has been triggered. Context type: ' + scriptContext.type);
+            log.debug('afterSubmit has been triggered. Context type: ' + scriptContext.type);
 
             if (scriptContext.type === scriptContext.UserEventType.DELETE) {
                 return;
@@ -38,6 +38,16 @@ define(['N/record', 'N/runtime', 'N/error', './bb1_jkr_prod_ord_helper_lib'],
                     isDynamic: false
                 });
 
+                if (newRecord.type === record.Type.ITEM_RECEIPT) {
+                    var itemLineCount = loadedRecord.getLineCount({sublistId: 'item'});
+
+                    for (var i = 0; i < itemLineCount; i++) {
+                        //no Item Receipt logic yet - checker added since this UE is also deployed on Item Receipt
+                    }
+
+                    return;
+                }
+
                 if (helperLib.LIB_FX.hasProjOrder(loadedRecord)) {
                     log.debug('Sales Order already linked to a Project Order - skipping');
                     return;
@@ -47,7 +57,7 @@ define(['N/record', 'N/runtime', 'N/error', './bb1_jkr_prod_ord_helper_lib'],
                 var hasCreateWoLine = helperLib.LIB_FX.hasCreateWoLine(loadedRecord);
                 var hasWorkOrderLink = helperLib.LIB_FX.hasWorkOrderLink(loadedRecord);
 
-                log.debug('BB1 WF Trigger Test - conditions', {
+                log.debug('SO Conditions', {
                     isPendingFulfillment: isPendingFulfillment,
                     hasCreateWoLine: hasCreateWoLine,
                     hasWorkOrderLink: hasWorkOrderLink
@@ -58,7 +68,7 @@ define(['N/record', 'N/runtime', 'N/error', './bb1_jkr_prod_ord_helper_lib'],
                         name: helperLib._CONFIG.SCRIPTS.PARAM.WO_SEARCH
                     });
 
-                    log.debug('BB1 WF Trigger Test', 'All conditions met - creating Project Order');
+                    log.debug('All conditions met - creating Project Order');
                     helperLib.LIB_FX.createProjOrder(loadedRecord, newRecord.id, idWoSearch);
                 }
             } catch (e) {
