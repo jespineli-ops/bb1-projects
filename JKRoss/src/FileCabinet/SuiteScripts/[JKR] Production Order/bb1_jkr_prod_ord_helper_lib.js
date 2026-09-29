@@ -39,7 +39,8 @@ define(['N/record', 'N/search', 'N/format'],
                     SALES_ORDER: 'custrecord_bb1_prjord_so',
                     STATUS: 'custrecord_bb1_prjord_status',
                     TOTAL_WO: 'custrecord_bb1_prjord_wo',
-                    TOTAL_WO_COMPLETED: 'custrecord_bb1_prjord_wo_comp'
+                    TOTAL_WO_COMPLETED: 'custrecord_bb1_prjord_wo_comp',
+                    PDF_DATA: 'custrecord_bb1_prjord_pdf_data'
                 },
                 SUBLIST: {
                     LINE: {
