@@ -1,0 +1,93 @@
+<?xml version="1.0"?>
+<!DOCTYPE pdf PUBLIC "-//big.faceless.org//report" "report-1.1.dtd">
+<pdf>
+<head>
+    <link name="NotoSans" type="font" subtype="truetype" src="${nsfont.NotoSans_Regular}" src-bold="${nsfont.NotoSans_Bold}" src-italic="${nsfont.NotoSans_Italic}" src-bolditalic="${nsfont.NotoSans_BoldItalic}" bytes="2" />
+    <#if .locale == "zh_CN">
+    <link name="NotoSansCJKsc" type="font" subtype="opentype" src="${nsfont.NotoSansCJKsc_Regular}" src-bold="${nsfont.NotoSansCJKsc_Bold}" bytes="2" />
+    <#elseif .locale == "zh_TW">
+    <link name="NotoSansCJKtc" type="font" subtype="opentype" src="${nsfont.NotoSansCJKtc_Regular}" src-bold="${nsfont.NotoSansCJKtc_Bold}" bytes="2" />
+    <#elseif .locale == "ja_JP">
+    <link name="NotoSansCJKjp" type="font" subtype="opentype" src="${nsfont.NotoSansCJKjp_Regular}" src-bold="${nsfont.NotoSansCJKjp_Bold}" bytes="2" />
+    <#elseif .locale == "ko_KR">
+    <link name="NotoSansCJKkr" type="font" subtype="opentype" src="${nsfont.NotoSansCJKkr_Regular}" src-bold="${nsfont.NotoSansCJKkr_Bold}" bytes="2" />
+    <#elseif .locale == "th_TH">
+    <link name="NotoSansThai" type="font" subtype="opentype" src="${nsfont.NotoSansThai_Regular}" src-bold="${nsfont.NotoSansThai_Bold}" bytes="2" />
+</#if>
+<style>
+    * {
+    <#if .locale == "zh_CN">
+    font-family: NotoSans, NotoSansCJKsc, sans-serif;
+    <#elseif .locale == "zh_TW">
+    font-family: NotoSans, NotoSansCJKtc, sans-serif;
+    <#elseif .locale == "ja_JP">
+    font-family: NotoSans, NotoSansCJKjp, sans-serif;
+    <#elseif .locale == "ko_KR">
+    font-family: NotoSans, NotoSansCJKkr, sans-serif;
+    <#elseif .locale == "th_TH">
+    font-family: NotoSans, NotoSansThai, sans-serif;
+    <#else>
+    font-family: NotoSans, sans-serif;
+</#if>
+        }
+        .sheet {
+        width: 7.5in;
+        table-layout: fixed;
+        margin: 0;
+        }
+        .slot {
+        width: 2.5in;
+        height: 2.0in;
+        padding: 0;
+        vertical-align: top;
+        }
+        .label {
+        font-size: 9pt;
+        margin: 0;
+        table-layout: fixed;
+        width: 2.5in;
+        height: 2.0in;
+        }
+        td p { align:left }
+</style>
+        </head>
+<body padding="0.5in 0.5in 0.5in 0.5in" size="Letter">
+<#assign blankLabelCount = startlabel - 1>
+<#assign totalSlots = blankLabelCount + records?size>
+<#assign cols = 3> <!-- keep 3 if slot is 2.5in -->
+<#assign rowsPerPage = 5>
+<#assign slotsPerPage = cols * rowsPerPage>
+<#assign pageCount = (totalSlots / slotsPerPage)?ceiling>
+
+<#list 0..<pageCount as pageIndex>
+    <table class="sheet">
+        <#list 0..<rowsPerPage as rowIndex>
+        <#assign rowStart = pageIndex * slotsPerPage + rowIndex * cols>
+        <#if rowStart < totalSlots>
+        <tr>
+            <#list 0..<cols as colIndex>
+            <#assign slotIndex = rowStart + colIndex>
+            <td class="slot">
+                <#if slotIndex < totalSlots>
+                <#assign recordIndex = slotIndex - blankLabelCount>
+                <#if recordIndex < 0>
+                <table class="label"><tr></tr></table>
+                <#else>
+                <#assign label = records[recordIndex]>
+                <table class="label">
+                    <tr>
+                        <td>${label.address}</td>
+                    </tr>
+                </table>
+            </#if>
+            </#if>
+        </td>
+        </#list>
+    </tr>
+    </#if>
+    </#list>
+</table>
+<#if pageIndex < pageCount - 1> <pbr /></#if>
+        </#list>
+        </body>
+        </pdf>
