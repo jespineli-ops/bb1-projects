@@ -51,7 +51,8 @@ define(['N/record', 'N/search', 'N/format'],
                         BUILDABLE: 'custrecord_bb1_prjord_l_buildable',
                         BUILT: 'custrecord_bb1_prjord_l_buildt',
                         EST_START: 'custrecord_bb1_prjord_l_est_start',
-                        EST_END: 'custrecord_bb1_prjord_l_est_end'
+                        EST_END: 'custrecord_bb1_prjord_l_est_end',
+                        PDF_DATA: 'custrecord_bb1_prjord_l_pdf_data'
                     }
                 }
             }
