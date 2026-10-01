@@ -1,0 +1,182 @@
+<?xml version="1.0"?>
+<!DOCTYPE pdf PUBLIC "-//big.faceless.org//report" "report-1.1.dtd">
+<pdf>
+    <head>
+        <link name="NotoSans" type="font" subtype="truetype" src="${nsfont.NotoSans_Regular}" src-bold="${nsfont.NotoSans_Bold}" src-italic="${nsfont.NotoSans_Italic}" src-bolditalic="${nsfont.NotoSans_BoldItalic}" bytes="2" />
+        <#if .locale == "zh_CN">
+        <link name="NotoSansCJKsc" type="font" subtype="opentype" src="${nsfont.NotoSansCJKsc_Regular}" src-bold="${nsfont.NotoSansCJKsc_Bold}" bytes="2" />
+        <#elseif .locale == "zh_TW">
+        <link name="NotoSansCJKtc" type="font" subtype="opentype" src="${nsfont.NotoSansCJKtc_Regular}" src-bold="${nsfont.NotoSansCJKtc_Bold}" bytes="2" />
+        <#elseif .locale == "ja_JP">
+        <link name="NotoSansCJKjp" type="font" subtype="opentype" src="${nsfont.NotoSansCJKjp_Regular}" src-bold="${nsfont.NotoSansCJKjp_Bold}" bytes="2" />
+        <#elseif .locale == "ko_KR">
+        <link name="NotoSansCJKkr" type="font" subtype="opentype" src="${nsfont.NotoSansCJKkr_Regular}" src-bold="${nsfont.NotoSansCJKkr_Bold}" bytes="2" />
+        <#elseif .locale == "th_TH">
+        <link name="NotoSansThai" type="font" subtype="opentype" src="${nsfont.NotoSansThai_Regular}" src-bold="${nsfont.NotoSansThai_Bold}" bytes="2" />
+    </#if>
+    <macrolist>
+        <macro id="nlheader">
+            <table class="header" style="width: 100%;">
+                <tr>
+                    <td rowspan="3">
+                        <#if companyInformation.logoUrl?length != 0>
+                        <@filecabinet nstype="image" style="float: left; margin: 7px;" src="${companyInformation.logoUrl}" />
+                    </#if>
+                    <span class="nameandaddress">${companyInformation.companyName}</span><br />
+                    <span class="nameandaddress">${companyInformation.addressText}</span>
+                </td>
+                <td align="right"><span class="title">Picking Ticket</span></td>
+            </tr>
+        </table>
+    </macro>
+    <macro id="nlfooter">
+        <table class="footer" style="width: 100%;">
+            <tr>
+                <td align="right"><pagenumber/> of <totalpages/></td>
+            </tr>
+        </table>
+    </macro>
+</macrolist>
+<style>
+* {
+<#if .locale == "zh_CN">
+font-family: NotoSans, NotoSansCJKsc, sans-serif;
+<#elseif .locale == "zh_TW">
+font-family: NotoSans, NotoSansCJKtc, sans-serif;
+<#elseif .locale == "ja_JP">
+font-family: NotoSans, NotoSansCJKjp, sans-serif;
+<#elseif .locale == "ko_KR">
+font-family: NotoSans, NotoSansCJKkr, sans-serif;
+<#elseif .locale == "th_TH">
+font-family: NotoSans, NotoSansThai, sans-serif;
+<#else>
+font-family: NotoSans, sans-serif;
+</#if>
+        }
+        table {
+        font-size: 9pt;
+        table-layout: fixed;
+        }
+        th {
+        font-weight: bold;
+        font-size: 8pt;
+        vertical-align: middle;
+        padding: 5px 6px 3px;
+        background-color: #e3e3e3;
+        color: #333333;
+        }
+        td {
+        padding: 4px 6px;
+        }
+        td p { align:left }
+        b {
+        font-weight: bold;
+        color: #333333;
+        }
+        table.header td {
+        padding: 0;
+        font-size: 10pt;
+        }
+        table.footer td {
+        padding: 0;
+        font-size: 8pt;
+        }
+        table.itemtable th {
+        padding-bottom: 10px;
+        padding-top: 10px;
+        }
+        table.body td {
+        padding-top: 2px;
+        }
+        td.addressheader {
+        font-size: 8pt;
+        padding-top: 6px;
+        padding-bottom: 2px;
+        }
+        td.address {
+        padding-top: 0;
+        }
+        span.title {
+        font-size: 28pt;
+        }
+        span.number {
+        font-size: 16pt;
+        }
+        span.itemname {
+        font-weight: bold;
+        line-height: 150%;
+        }
+        hr {
+        width: 100%;
+        color: #d3d3d3;
+        background-color: #d3d3d3;
+        height: 1px;
+        }
+        </style>
+        </head>
+<body header="nlheader" header-height="10%" footer="nlfooter" footer-height="20pt" padding="0.5in 0.5in 0.5in 0.5in" size="A4">
+<#if customrecord_bb1_jkr_ir_pick_data.custrecord_bb1_jkr_ir_pick_data_json?has_content>
+<#assign custPDFdata = customrecord_bb1_jkr_ir_pick_data.custrecord_bb1_jkr_ir_pick_data_json?eval>
+<#else>
+<#assign custPDFdata = {}>
+</#if>
+<table style="width: 100%;">
+    <tr>
+        <td><barcode codetype="code128" showtext="true" value="${custPDFdata.tranid}"/></td>
+        <td align="right">
+            <span class="number">#${custPDFdata.tranid}</span><br />
+            ${custPDFdata.trandate}
+        </td>
+    </tr>
+</table>
+<table style="width: 100%; margin-top: 10px;">
+    <tr>
+        <td class="addressheader"><strong>Shipping Address</strong></td>
+    </tr>
+    <tr>
+        <td class="address">${custPDFdata.shipaddress}</td>
+    </tr>
+</table>
+<table class="body" style="width: 100%; margin-top: 10px;">
+    <tr>
+        <th>Ship Via</th>
+    </tr>
+    <tr>
+        <td>${custPDFdata.shipmethod}</td>
+    </tr>
+</table>
+<#if custPDFdata.item?has_content>
+<table class="itemtable" style="width: 100%; margin-top: 10px;">
+    <!-- start items -->
+    <#list custPDFdata.item as item>
+    <#if item_index==0>
+    <thead>
+        <tr>
+            <th style="width: 49.9764%;" colspan="4">Item</th>
+            <th style="width: 12.4892%;">
+                <p>Shelf Number</p>
+            </th>
+            <th style="width: 12.4892%;">Quantity</th>
+            <th style="width: 12.4892%;">Units</th>
+            <th style="width: 12.4892%;">Qty. Picked</th>
+        </tr>
+    </thead>
+</#if>
+<tr>
+    <td style="width: 49.9764%;" colspan="4"><span class="itemname">${item.item}</span><br />${item.description}</td>
+    <td style="width: 12.4892%;">${item.custcol_bb1_shelf_number}</td>
+    <td style="text-align: right; width: 12.4892%;">
+        <p style="text-align: right;">${item.quantitycommitted}</p>
+    </td>
+    <td style="width: 12.4892%;">${item.units}</td>
+    <td style="width: 12.4892%; border: 1px solid rgb(0, 0, 0);">&nbsp;</td>
+</tr>
+<tr>
+    <td style="width: 99.933%;" colspan="8"><hr /><br />${item.options}</td>
+</tr>
+</#list>
+        <!-- end items -->
+        </table>
+        </#if>
+        </body>
+        </pdf>
