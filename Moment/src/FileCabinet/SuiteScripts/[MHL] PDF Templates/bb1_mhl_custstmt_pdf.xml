@@ -3,6 +3,19 @@
 <pdfset>
     <#if statements?has_content>
     <#list statements as statement>
+    <#-- Subsidiary address without the name lines: mainaddress_text repeats the name as Attention and Addressee, so drop
+         any line matching the subsidiary name (or an earlier line) and print the name once from subsidiary.name -->
+    <#assign subName = (subsidiary.name)!"">
+    <#assign subAddrSeen = [subName?trim?lower_case]>
+    <#assign subAddrLines = []>
+    <#list ((subsidiary.mainaddress_text)!"")?replace("\r", "")?replace("<br />", "\n")?replace("<br/>", "\n")?split("\n") as rawLine>
+        <#assign addrLine = rawLine?trim>
+        <#if addrLine?has_content && !subAddrSeen?seq_contains(addrLine?lower_case)>
+            <#assign subAddrLines = subAddrLines + [addrLine]>
+            <#assign subAddrSeen = subAddrSeen + [addrLine?lower_case]>
+        </#if>
+    </#list>
+    <#assign subAddress = subAddrLines?join("<br/>")>
     <pdf>
         <head>
             <link name="NotoSans" type="font" subtype="truetype" src="${nsfont.NotoSans_Regular}" src-bold="${nsfont.NotoSans_Bold}" src-italic="${nsfont.NotoSans_Italic}" src-bolditalic="${nsfont.NotoSans_BoldItalic}" bytes="2" />
@@ -22,13 +35,13 @@
                 <table class="header" style="width: 100%;">
                     <tr>
                         <td>
-                            <#if companyInformation.logoUrl?length != 0>
-                                <@filecabinet nstype="image" style="float: left; margin: 7px;" src="${companyInformation.logoUrl}" width="200px" height="40px"/>
+                            <#if subsidiary?? && subsidiary.pagelogo@url?has_content>
+                                <img src="${subsidiary.pagelogo@url}" style="float: left; margin: 7px; width: 200px; height: 40px;"/>
                             </#if>
                             <#-- padding-left matches the default td padding so this lines up with the Billing Address block -->
                             <div style="font-size:8pt; margin-top:5px; padding-left:6px;">
-                                <span class="nameandaddress">${companyInformation.companyName}</span><br/>
-                                <span class="nameandaddress">${companyInformation.addressText}</span>
+                                <span class="nameandaddress">${subName}</span><br/>
+                                <span class="nameandaddress">${subAddress}</span>
                             </div>
                         </td>
                         <td style="line-height:140%;"></td>
@@ -132,6 +145,12 @@
 <body header="nlheader" header-height="15%" footer="nlfooter" footer-height="20pt" padding="0.5in 0.5in 0.5in 0.5in" size="Letter">
 <table style="width: 100%; margin-top: 10px;">
     <tr>
+        <td class="addressheader" colspan="3">Statement For</td>
+    </tr>
+    <tr>
+        <td class="address" colspan="3">${customer.altname}</td>
+    </tr>
+    <tr>
         <td class="addressheader" colspan="3">${statement.billaddress@label}</td>
     </tr>
     <tr>
@@ -188,12 +207,22 @@
 </tr>
 </table>
         </#if>
+<#if subsidiary?? && subsidiary.custrecord_bb1_mhl_sub_bank_details?has_content>
+<table style="width: 100%; margin-top: 10px;">
+    <tr>
+        <td class="addressheader">Bank Information:</td>
+    </tr>
+    <tr>
+        <td class="address"><pre style="font-family: NotoSans, sans-serif; font-size: 8pt;">${subsidiary.custrecord_bb1_mhl_sub_bank_details}</pre></td>
+    </tr>
+</table>
+</#if>
 <#if preferences.RETURNFORM && remittanceSlip??>
 <hr />
 <div class="remittanceSlip">
 <table style="width: 100%; margin-top: 10px;">
     <tr>
-        <td><span class="nameandaddress">${companyInformation.companyName}</span></td>
+        <td><span class="nameandaddress">${subName}</span></td>
         <td align="right"><span class="number">${remittanceSlip@title}</span></td>
     </tr>
 </table>
@@ -205,7 +234,7 @@
         <th>${remittanceSlip.amountPaid@label}</th>
     </tr>
     <tr>
-        <td>${companyInformation.addressText}</td>
+        <td>${subAddress}</td>
         <td>${statement.trandate}</td>
         <td align="right">${statement.amountDue}</td>
         <td></td>
@@ -218,7 +247,7 @@
     </tr>
     <tr>
         <td>${remittanceSlip.ccinfo}</td>
-        <td>${companyInformation.addressText}</td>
+        <td>${subAddress}</td>
     </tr>
 </table>
 </div>
