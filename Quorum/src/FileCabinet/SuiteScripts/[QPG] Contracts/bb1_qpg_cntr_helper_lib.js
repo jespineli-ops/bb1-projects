@@ -44,6 +44,7 @@ define(['N/record', 'N/runtime', 'N/search', 'N/format'],
                 SUBLIST: {
                     CHARGES: {
                         ID:                 'recmachcustrecord_bb1_utilised_lease',
+                        LEASE:              'custrecord_bb1_utilised_lease',
                         UTIL_DATE:          'custrecord_bb1_utilised_date',
                         FX_CHRG_TYE:        'custrecord_bb1_utilised_fixed_charges',
                         DESC:               'custrecord_bb1_utilised_description',
@@ -604,6 +605,36 @@ define(['N/record', 'N/runtime', 'N/search', 'N/format'],
         }
 
         /**
+         * pushes every non-voided, uninvoiced charge on the contract onto the existing invoice for its period.
+         * Safe to call more than once for the same contract - already invoiced charges are filtered out
+         */
+        LIB_FX.invoiceNewCharges = (idContract, idUtChargeSea) => {
+            let allCharges = LIB_FX.searchData(idUtChargeSea, 'utilChrgAll', '', '', idContract);
+            let uninvoicedCharges = LIB_FX.checkUtilisedCharges(allCharges, idContract);
+
+            LIB_FX.processUninvoicedCharges(uninvoicedCharges, idContract, idUtChargeSea);
+        }
+
+        /**
+         * true if a standalone utilised charge record (CSV import / charge form) should be pushed onto an
+         * existing invoice - linked to a contract, not voided and not already invoiced
+         */
+        LIB_FX.isChargeInvoiceable = (chargeRec) => {
+            let chargeFields = _FIELDS.CONTRACT.SUBLIST.CHARGES;
+
+            return !!chargeRec.getValue({fieldId: chargeFields.LEASE}) &&
+                !chargeRec.getValue({fieldId: chargeFields.INVOICE}) &&
+                String(chargeRec.getValue({fieldId: chargeFields.STATUS})) !== String(UTILISED_CHARGE_STATUS.VOIDED);
+        }
+
+        /**
+         * contract id a standalone utilised charge record is linked to
+         */
+        LIB_FX.getChargeContractId = (chargeRec) => {
+            return chargeRec.getValue({fieldId: _FIELDS.CONTRACT.SUBLIST.CHARGES.LEASE});
+        }
+
+        /**
          * set the flag for updating of invoice on save
          */
         LIB_FX.flagContractUpdating = (contractRec) => {
@@ -696,8 +727,45 @@ define(['N/record', 'N/runtime', 'N/search', 'N/format'],
             return LIB_FX.findInvoiceForCharges(chargeIds);
         }
 
+        //how many times an invoice update is retried when another save got to the invoice first
+        const INVOICE_SAVE_ATTEMPTS = 3;
+
         /**
-         * handles the processing of uninvoiced charges triggered from the MR script called by the UE script
+         * loads the invoice, adds only the charges not already on it and saves - reloads and retries if the
+         * invoice was changed by someone else in between (e.g. multi-threaded CSV rows hitting the same invoice)
+         */
+        const addChargesToInvoiceWithRetry = (idInvoice, periodCharges) => {
+            let sublistId = _FIELDS.INVOICE.SUBLIST.ITEMS.ID;
+
+            for(let attempt = 1; attempt <= INVOICE_SAVE_ATTEMPTS; attempt++){
+                try{
+                    let invoiceRec = record.load({
+                        type: record.Type.INVOICE,
+                        id: idInvoice,
+                        isDynamic: true
+                    });
+
+                    //guard against adding the same charge twice if both the contract UE and charge UE fire for it
+                    let existingChargeIds = LIB_FX.getExistingChargeIds(invoiceRec, sublistId);
+                    let newCharges = periodCharges.filter((charge) => !existingChargeIds.has(String(charge.id)));
+
+                    if(newCharges.length){
+                        addChargeLinesToInvoice(invoiceRec, sublistId, newCharges);
+                        invoiceRec.save();
+                    }
+
+                    return newCharges.length;
+                }catch(e){
+                    if(e.name !== 'RCRD_HAS_BEEN_CHANGED' || attempt === INVOICE_SAVE_ATTEMPTS){
+                        throw e;
+                    }
+                    log.debug('addChargesToInvoiceWithRetry', 'Invoice ' + idInvoice + ' changed by another save - retrying (attempt ' + (attempt + 1) + ' of ' + INVOICE_SAVE_ATTEMPTS + ')');
+                }
+            }
+        }
+
+        /**
+         * handles the processing of uninvoiced charges - called inline from the contract UE and charge UE
          */
         LIB_FX.processUninvoicedCharges = (uninvoicedCharges, idContract, idUtChargeSea) => {
             let chargeFields = _FIELDS.CONTRACT.SUBLIST.CHARGES;
@@ -720,15 +788,8 @@ define(['N/record', 'N/runtime', 'N/search', 'N/format'],
                     return;
                 }
 
-                let invoiceRec = record.load({
-                    type: record.Type.INVOICE,
-                    id: idInvoice,
-                    isDynamic: true
-                });
-
-                addChargeLinesToInvoice(invoiceRec, _FIELDS.INVOICE.SUBLIST.ITEMS.ID, periodCharges);
-                invoiceRec.save();
-                log.debug('processUninvoicedCharges', 'Invoice ' + idInvoice + ' updated with ' + periodCharges.length + ' new charge line(s) for period ' + period);
+                let addedCount = addChargesToInvoiceWithRetry(idInvoice, periodCharges);
+                log.debug('processUninvoicedCharges', 'Invoice ' + idInvoice + ' updated with ' + addedCount + ' new charge line(s) for period ' + period);
 
                 LIB_FX.updateUtilisedCharges(periodCharges, idInvoice);
             });
