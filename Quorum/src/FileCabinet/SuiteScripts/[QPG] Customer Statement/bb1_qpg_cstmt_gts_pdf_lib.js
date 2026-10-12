@@ -18,6 +18,7 @@
  * 15-September-2026    Jared Espineli      Restyled the Entity/Property panel to a stacked label/value layout. Also logs the full XML on a render.xmlToPdf failure (chunked, since log.error truncates at 4000 chars) - render.xmlToPdf gives the same generic "unexpected error" message as SuiteQL on failure, so the markup itself needs logging to find a malformed-XML bug.
  * 16-September-2026    Jared Espineli      Added getOpenBalance() so Amount Due/aging reflect the true AR balance (unapplied payments/credits included), with the residual folded into the Current bucket so the aging strip still sums to Amount Due.
  * 18-September-2026    Jared Espineli      Bank Details table now sourced from the subsidiary's custrecord_statement_banking_details instead of the per-invoice custbody_alf_bank_det_to_print, so it no longer depends on an invoice existing in the statement period.
+ * 12-October-2026      Jared Espineli      Address block under the customer name now sourced from the subsidiary's main address (addr1/addr2/addr3/city/state/zip/country) instead of the customer's default billing address.
  *
  * Copyright (c) 2026 BlueBridge One Business Solutions, All Rights Reserved
  * support@bluebridgeone.com, UK Support: +44 (0)1932 300007 SA Support: +27 (0)10 500 8674
@@ -227,7 +228,8 @@ define(['N/query', 'N/search', 'N/record', 'N/error', 'N/render', 'N/file', 'N/u
                     queries_whatsapp: entityFields.queries_whatsapp,
                     terms_and_conditions: entityFields.terms_and_conditions,
                     company_logo_url: entityFields.company_logo_url,
-                    bank_details: entityFields.bank_details
+                    bank_details: entityFields.bank_details,
+                    bill_address: entityFields.bill_address
                 };
             }
 
@@ -251,56 +253,60 @@ define(['N/query', 'N/search', 'N/record', 'N/error', 'N/render', 'N/file', 'N/u
             headerRow.queries_email = entityFields.queries_email;
             headerRow.queries_whatsapp = entityFields.queries_whatsapp;
             headerRow.terms_and_conditions = entityFields.terms_and_conditions;
-            headerRow.bill_address = getBillingAddress(customerId);
+            headerRow.bill_address = entityFields.bill_address;
 
             return headerRow;
         }
 
-        //-----------------------------------------------
-        //Bill-to address - the customer record's default billing address
-        //-----------------------------------------------
-        const getBillingAddress = (customerId) => {
+        // Per-execution cache of formatted subsidiary addresses, keyed by subsidiary id - same reasoning as
+        // subsidiaryLogoUrlCache below (many customers share a subsidiary).
+        const subsidiaryAddressCache = {};
 
-            if (!customerId) return '';
+        //-----------------------------------------------
+        //Address block under the customer name - the subsidiary's main address
+        //-----------------------------------------------
+        const getSubsidiaryAddress = (subsidiaryId) => {
 
-            // Preferred: the address flagged as default billing on the customer (addrtext is NetSuite's own
-            // formatted block).
+            if (!subsidiaryId) return '';
+
+            if (Object.prototype.hasOwnProperty.call(subsidiaryAddressCache, subsidiaryId)) {
+                return subsidiaryAddressCache[subsidiaryId];
+            }
+
+            let address = '';
             try {
+                // Kept out of fillFromSubsidiaryQuery so a failure on the address join can't blank out the
+                // other subsidiary fields. BUILTIN.DF on country gives the name ("South Africa") not the code.
                 const sql =
-                    'SELECT ea.addrtext AS bill_address ' +
-                    'FROM customerAddressbook cab ' +
-                    'JOIN customerAddressbookEntityAddress ea ' +
-                    '       ON ea.nkey = cab.addressbookaddress ' +
-                    `WHERE cab.entity = ${assertId(customerId)} ` +
-                    "  AND cab.defaultbilling = 'T'";
+                    'SELECT ' +
+                    '    a.addr1                                 AS addr1, ' +
+                    '    a.addr2                                 AS addr2, ' +
+                    '    a.addr3                                 AS addr3, ' +
+                    '    a.city                                  AS city, ' +
+                    '    a.state                                 AS state, ' +
+                    '    a.zip                                   AS zip, ' +
+                    '    BUILTIN.DF(a.country)                   AS country ' +
+                    'FROM subsidiary s, subsidiaryMainAddress a ' +
+                    'WHERE s.mainaddress = a.nkey ' +
+                    `  AND s.id = ${assertId(subsidiaryId)}`;
 
                 const rows = query.runSuiteQL({query: sql}).asMappedResults();
 
-                if (rows.length && rows[0].bill_address) return rows[0].bill_address;
+                if (rows.length) {
+                    const row = rows[0];
+                    // One line per part, with city/state/zip on a single line (e.g. "Bryanston GT 2191").
+                    const cityLine = [row.city, row.state, row.zip].filter(Boolean).join(' ');
+                    address = [row.addr1, row.addr2, row.addr3, cityLine, row.country]
+                        .filter(Boolean)
+                        .join('\n');
+                }
 
             } catch (e) {
-                log.error(`Billing address query failed for customer ${customerId}`, e.message);
+                log.error(`Subsidiary address query failed for ${subsidiaryId}`, e.message);
             }
 
-            // Fallback: no address flagged default billing - use whichever address book entry comes first.
-            // 'defaultaddress' isn't a valid search.lookupFields column on Customer, so this stays SuiteQL too.
-            try {
-                const sql =
-                    'SELECT ea.addrtext AS bill_address ' +
-                    'FROM customerAddressbook cab ' +
-                    'JOIN customerAddressbookEntityAddress ea ' +
-                    '       ON ea.nkey = cab.addressbookaddress ' +
-                    `WHERE cab.entity = ${assertId(customerId)} ` +
-                    'FETCH FIRST 1 ROWS ONLY';
-
-                const rows = query.runSuiteQL({query: sql}).asMappedResults();
-
-                return (rows.length && rows[0].bill_address) || '';
-
-            } catch (e) {
-                log.error(`Fallback address query failed for customer ${customerId}`, e.message);
-                return '';
-            }
+            subsidiaryAddressCache[subsidiaryId] = address;
+            return address;
         }
 
         //-----------------------------------------------
@@ -339,7 +345,9 @@ define(['N/query', 'N/search', 'N/record', 'N/error', 'N/render', 'N/file', 'N/u
                 // Subsidiary's own banking details (custrecord_statement_banking_details) - replaces the old
                 // per-invoice custbody_alf_bank_det_to_print as the source for the Bank Details table, same
                 // "Label: Value" free-text format (see BANK_DETAIL_LABELS/parseBankDetails below).
-                bank_details: ''
+                bank_details: '',
+                // Subsidiary's main address, printed under the customer name (see getSubsidiaryAddress).
+                bill_address: ''
             };
 
             let subsidiaryId = subsidiaryFromInvoice || null;
@@ -382,6 +390,7 @@ define(['N/query', 'N/search', 'N/record', 'N/error', 'N/render', 'N/file', 'N/u
                 // 'logo' is a File-type native field that isn't reliably queryable through SuiteQL, and one
                 // bad column there would silently blank out every other subsidiary field on the statement.
                 values.company_logo_url = getSubsidiaryLogoUrl(subsidiaryId);
+                values.bill_address = getSubsidiaryAddress(subsidiaryId);
             }
 
             return values;
