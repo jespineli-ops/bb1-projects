@@ -6,8 +6,12 @@
  * Blocks saving an Item Fulfillment with status Shipped unless Shipping
  * Method and Boxes are both populated.
  *
+ * Also handles the Print Label button (added by bb1_jkr_if_mandfields_ue.js beforeLoad) -
+ * opens bb1_jkr_if_print_label_sl.js in a new window to render the label PDF
+ *
  * Date                Author              Purpose
  * 28-September-2026   Jared Espineli      Initial Release
+ * 13-October-2026     Jared Espineli      Added Print Label button handler
  *
  * Copyright (c) 2026 BlueBridge One Business Solutions, All Rights Reserved
  * support@bluebridgeone.com, UK Support: +44 (0)1932 300007 SA Support: +27 (0)10 500 8674
@@ -16,9 +20,9 @@
  * @NScriptType ClientScript
  * @NModuleScope SameAccount
  */
-define(['N/ui/message', 'N/log'],
+define(['N/ui/message', 'N/log', 'N/url', 'N/currentRecord'],
 
-    function (message, log) {
+    function (message, log, url, currentRecord) {
 
         var STATUS_SHIPPED = 'Shipped';
 
@@ -27,6 +31,14 @@ define(['N/ui/message', 'N/log'],
             SHIP_METHOD: 'shipmethod',
             BOXES: 'custbody_bb1_boxes'
         };
+
+        //TODO: confirm against the actual Suitelet script/deployment records once created in NetSuite
+        var PRINT_LABEL_SCRIPT_ID = 'customscript_bb1_jkr_if_print_label_sl';
+        var PRINT_LABEL_DEPLOY_ID = 'customdeploy_bb1_jkr_if_print_label_sl';
+
+        //request parameters the Suitelet reads - must match bb1_jkr_if_print_label_sl.js
+        var REQUEST_PARAM_IF_ID = 'custscript_bb1_jkr_if_print_label_id_su';
+        var REQUEST_PARAM_TEMPLATE_ID = 'custscript_bb1_jkr_if_print_label_tmpl_su';
 
         /**
          * @param {Object} scriptContext
@@ -63,8 +75,33 @@ define(['N/ui/message', 'N/log'],
             return true;
         }
 
+        //Triggered by the Print Label button (see bb1_jkr_if_mandfields_ue.js beforeLoad)
+        function printLabel(templateId) {
+            if (!templateId) {
+                message.create({
+                    title: 'Print Label',
+                    message: 'No label template is set on the script deployment (custscript_bb1_jkr_if_label_tmplt).',
+                    type: message.Type.ERROR
+                }).show({duration: 8000});
+                return;
+            }
+
+            var params = {};
+            params[REQUEST_PARAM_IF_ID] = currentRecord.get().id;
+            params[REQUEST_PARAM_TEMPLATE_ID] = templateId;
+
+            var suiteletUrl = url.resolveScript({
+                scriptId: PRINT_LABEL_SCRIPT_ID,
+                deploymentId: PRINT_LABEL_DEPLOY_ID,
+                params: params
+            });
+
+            window.open(suiteletUrl, '_blank');
+        }
+
         return {
-            saveRecord: saveRecord
+            saveRecord: saveRecord,
+            printLabel: printLabel
         };
 
     });

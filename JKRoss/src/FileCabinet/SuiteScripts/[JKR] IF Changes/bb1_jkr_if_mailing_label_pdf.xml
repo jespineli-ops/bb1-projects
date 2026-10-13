@@ -1,93 +1,92 @@
+<#ftl output_format="XML" auto_esc=false>
 <?xml version="1.0"?>
 <!DOCTYPE pdf PUBLIC "-//big.faceless.org//report" "report-1.1.dtd">
 <pdf>
 <head>
     <link name="NotoSans" type="font" subtype="truetype" src="${nsfont.NotoSans_Regular}" src-bold="${nsfont.NotoSans_Bold}" src-italic="${nsfont.NotoSans_Italic}" src-bolditalic="${nsfont.NotoSans_BoldItalic}" bytes="2" />
     <#if .locale == "zh_CN">
-    <link name="NotoSansCJKsc" type="font" subtype="opentype" src="${nsfont.NotoSansCJKsc_Regular}" src-bold="${nsfont.NotoSansCJKsc_Bold}" bytes="2" />
+        <link name="NotoSansCJKsc" type="font" subtype="opentype" src="${nsfont.NotoSansCJKsc_Regular}" src-bold="${nsfont.NotoSansCJKsc_Bold}" bytes="2" />
     <#elseif .locale == "zh_TW">
-    <link name="NotoSansCJKtc" type="font" subtype="opentype" src="${nsfont.NotoSansCJKtc_Regular}" src-bold="${nsfont.NotoSansCJKtc_Bold}" bytes="2" />
+        <link name="NotoSansCJKtc" type="font" subtype="opentype" src="${nsfont.NotoSansCJKtc_Regular}" src-bold="${nsfont.NotoSansCJKtc_Bold}" bytes="2" />
     <#elseif .locale == "ja_JP">
-    <link name="NotoSansCJKjp" type="font" subtype="opentype" src="${nsfont.NotoSansCJKjp_Regular}" src-bold="${nsfont.NotoSansCJKjp_Bold}" bytes="2" />
+        <link name="NotoSansCJKjp" type="font" subtype="opentype" src="${nsfont.NotoSansCJKjp_Regular}" src-bold="${nsfont.NotoSansCJKjp_Bold}" bytes="2" />
     <#elseif .locale == "ko_KR">
-    <link name="NotoSansCJKkr" type="font" subtype="opentype" src="${nsfont.NotoSansCJKkr_Regular}" src-bold="${nsfont.NotoSansCJKkr_Bold}" bytes="2" />
+        <link name="NotoSansCJKkr" type="font" subtype="opentype" src="${nsfont.NotoSansCJKkr_Regular}" src-bold="${nsfont.NotoSansCJKkr_Bold}" bytes="2" />
     <#elseif .locale == "th_TH">
-    <link name="NotoSansThai" type="font" subtype="opentype" src="${nsfont.NotoSansThai_Regular}" src-bold="${nsfont.NotoSansThai_Bold}" bytes="2" />
-</#if>
-<style>
-    * {
-    <#if .locale == "zh_CN">
-    font-family: NotoSans, NotoSansCJKsc, sans-serif;
-    <#elseif .locale == "zh_TW">
-    font-family: NotoSans, NotoSansCJKtc, sans-serif;
-    <#elseif .locale == "ja_JP">
-    font-family: NotoSans, NotoSansCJKjp, sans-serif;
-    <#elseif .locale == "ko_KR">
-    font-family: NotoSans, NotoSansCJKkr, sans-serif;
-    <#elseif .locale == "th_TH">
-    font-family: NotoSans, NotoSansThai, sans-serif;
-    <#else>
-    font-family: NotoSans, sans-serif;
-</#if>
-        }
-        .sheet {
-        width: 7.5in;
-        table-layout: fixed;
-        margin: 0;
-        }
-        .slot {
-        width: 2.5in;
-        height: 2.0in;
-        padding: 0;
-        vertical-align: top;
+        <link name="NotoSansThai" type="font" subtype="opentype" src="${nsfont.NotoSansThai_Regular}" src-bold="${nsfont.NotoSansThai_Bold}" bytes="2" />
+    </#if>
+    <style>
+        * {
+        <#if .locale == "zh_CN">
+            font-family: NotoSans, NotoSansCJKsc, sans-serif;
+        <#elseif .locale == "zh_TW">
+            font-family: NotoSans, NotoSansCJKtc, sans-serif;
+        <#elseif .locale == "ja_JP">
+            font-family: NotoSans, NotoSansCJKjp, sans-serif;
+        <#elseif .locale == "ko_KR">
+            font-family: NotoSans, NotoSansCJKkr, sans-serif;
+        <#elseif .locale == "th_TH">
+            font-family: NotoSans, NotoSansThai, sans-serif;
+        <#else>
+            font-family: NotoSans, sans-serif;
+        </#if>
         }
         .label {
-        font-size: 9pt;
-        margin: 0;
-        table-layout: fixed;
-        width: 2.5in;
-        height: 2.0in;
+            width: 100%;
+            font-size: 11pt;
+            margin: 0;
         }
-        td p { align:left }
+        .attn {
+            padding-bottom: 1.5mm;
+            border-bottom: 1.5px solid #333333;
+        }
+        .address {
+            padding-top: 1.5mm;
+            padding-bottom: 1.5mm;
+            border-bottom: 1.5px solid #333333;
+        }
+        .ref {
+            padding-top: 2mm;
+        }
+        .barcode {
+            padding-top: 1.5mm;
+            align: center;
+        }
 </style>
-        </head>
-<body padding="0.5in 0.5in 0.5in 0.5in" size="Letter">
-<#assign blankLabelCount = startlabel - 1>
-<#assign totalSlots = blankLabelCount + records?size>
-<#assign cols = 3> <!-- keep 3 if slot is 2.5in -->
-<#assign rowsPerPage = 5>
-<#assign slotsPerPage = cols * rowsPerPage>
-<#assign pageCount = (totalSlots / slotsPerPage)?ceiling>
-
-<#list 0..<pageCount as pageIndex>
-    <table class="sheet">
-        <#list 0..<rowsPerPage as rowIndex>
-        <#assign rowStart = pageIndex * slotsPerPage + rowIndex * cols>
-        <#if rowStart < totalSlots>
+</head>
+<#-- Print Label button (bb1_jkr_if_print_label_sl.js): labeldata = {attention, shipaddress, tranid, boxes}
+     - one 7.6cm x 7.6cm label per box -->
+<body width="76mm" height="76mm" padding="4mm 4mm 4mm 4mm">
+    <#assign boxCount = labeldata.boxes?number>
+    <#list 1..boxCount as boxNo>
+    <table class="label">
+        <#if labeldata.attention?has_content>
         <tr>
-            <#list 0..<cols as colIndex>
-            <#assign slotIndex = rowStart + colIndex>
-            <td class="slot">
-                <#if slotIndex < totalSlots>
-                <#assign recordIndex = slotIndex - blankLabelCount>
-                <#if recordIndex < 0>
-                <table class="label"><tr></tr></table>
-                <#else>
-                <#assign label = records[recordIndex]>
-                <table class="label">
+            <td class="attn">FAO : ${labeldata.attention}</td>
+        </tr>
+        </#if>
+        <tr>
+            <td class="address">
+                ${labeldata.shipaddress}
+            </td>
+        </tr>
+        <tr>
+            <td class="ref">
+                <table width="100%">
                     <tr>
-                        <td>${label.address}</td>
+                        <td width="50%">${labeldata.tranid}</td>
+                        <td width="50%">${boxNo} of ${boxCount}</td>
                     </tr>
                 </table>
-            </#if>
-            </#if>
-        </td>
-        </#list>
-    </tr>
-    </#if>
+            </td>
+        </tr>
+        <#if labeldata.tranid?has_content>
+        <tr>
+            <td class="barcode"><barcode codetype="code128" showtext="false" height="12mm" width="60mm" value="${labeldata.tranid}"/></td>
+        </tr>
+        </#if>
+    </table>
+    <#if boxNo_has_next><pbr width="76mm" height="76mm" padding="4mm 4mm 4mm 4mm" /></#if>
     </#list>
-</table>
-<#if pageIndex < pageCount - 1> <pbr /></#if>
-        </#list>
-        </body>
-        </pdf>
+</body>
+</pdf>
