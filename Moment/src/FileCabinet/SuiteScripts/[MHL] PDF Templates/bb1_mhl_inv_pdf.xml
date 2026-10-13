@@ -240,17 +240,35 @@
 
         <table class="total" style="width: 100%; margin-top: 10px;">
             <tr>
-                <td colspan="4">&nbsp;</td>
-                <td align="right"><strong>${record.subtotal@label}</strong></td>
-                <td align="right">${record.subtotal?replace("¤", record.currency + " ")}</td>
+                <td style="width: 45%;">&nbsp;</td>
+                <td align="right" style="width: 30%;"><strong>${record.subtotal@label}</strong></td>
+                <td align="right" style="width: 25%;">${record.subtotal?replace("¤", record.currency + " ")}</td>
             </tr>
             <tr>
-                <td colspan="4">&nbsp;</td>
+                <td>&nbsp;</td>
                 <td align="right"><strong>${record.taxtotal@label} (${record.taxrate}%)</strong></td>
                 <td align="right">${record.taxtotal?replace("¤", record.currency + " ")}</td>
             </tr>
+            <#if subsidiary.country?has_content && subsidiary.country?string == "United Arab Emirates" && record.custbody_bb1_uae_bank_roe?has_content>
+                <#assign uaeRoe = record.custbody_bb1_uae_bank_roe>
+                <tr>
+                    <td>&nbsp;</td>
+                    <td align="right"><strong>Net Amount in AED</strong></td>
+                    <td align="right">AED ${(record.subtotal * uaeRoe)?string(",##0.00")}</td>
+                </tr>
+                <tr>
+                    <td>&nbsp;</td>
+                    <td align="right"><strong>VAT Amount in AED</strong></td>
+                    <td align="right">AED ${(record.taxtotal * uaeRoe)?string(",##0.00")}</td>
+                </tr>
+                <tr>
+                    <td>&nbsp;</td>
+                    <td align="right"><strong>Gross Total In AED</strong></td>
+                    <td align="right">AED ${(record.total * uaeRoe)?string(",##0.00")}</td>
+                </tr>
+            </#if>
             <tr class="totalrow">
-                <td colspan="4">&nbsp;</td>
+                <td>&nbsp;</td>
                 <td align="right"><strong>${record.total@label}</strong></td>
                 <td align="right">${record.total?replace("¤", record.currency + " ")}</td>
             </tr>
