@@ -19,6 +19,7 @@
  * 16-September-2026    Jared Espineli      Added getOpenBalance() so Amount Due/aging reflect the true AR balance (unapplied payments/credits included), with the residual folded into the Current bucket so the aging strip still sums to Amount Due.
  * 18-September-2026    Jared Espineli      Bank Details table now sourced from the subsidiary's custrecord_statement_banking_details instead of the per-invoice custbody_alf_bank_det_to_print, so it no longer depends on an invoice existing in the statement period.
  * 12-October-2026      Jared Espineli      Address block under the customer name now sourced from the subsidiary's main address (addr1/addr2/addr3/city/state/zip/country) instead of the customer's default billing address.
+ * 15-October-2026      Jared Espineli      Address block now sourced from the Building segment's property address (custrecord_bb1_building_address) on the latest invoice, falling back to the customer's default billing address, then the customer's default address - replaces the subsidiary main address.
  *
  * Copyright (c) 2026 BlueBridge One Business Solutions, All Rights Reserved
  * support@bluebridgeone.com, UK Support: +44 (0)1932 300007 SA Support: +27 (0)10 500 8674
@@ -65,6 +66,11 @@ define(['N/query', 'N/search', 'N/record', 'N/error', 'N/render', 'N/file', 'N/u
 
         // How many months back payments stay itemised before folding into Balance B/f.
         const PAYMENT_MONTHS = 1;
+
+        // Building custom segment record and its property address field - printed under the customer name so
+        // the statement shows where the tenant currently occupies.
+        const BUILDING_RECORD = 'customrecord_cseg_bb1_building';
+        const BUILDING_ADDRESS = 'custrecord_bb1_building_address';
 
         const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June',
             'July', 'August', 'September', 'October', 'November', 'December'];
@@ -199,6 +205,7 @@ define(['N/query', 'N/search', 'N/record', 'N/error', 'N/render', 'N/file', 'N/u
                 '    t.custbody_alf_subsidiary_address       AS entity_address, ' +
                 '    t.custbody_alf_currency_symbol          AS currency_symbol, ' +
                 '    t.custbody_alf_payment_reference        AS payment_reference, ' +
+                '    t.cseg_bb1_building                     AS building_id, ' +
                 '    BUILTIN.DF(t.cseg_bb1_building)         AS property, ' +
                 '    BUILTIN.DF(t.cseg_bb1_unit)             AS unit_no, ' +
                 '    (SELECT MAX(tl.subsidiary) FROM transactionline tl ' +
@@ -229,7 +236,8 @@ define(['N/query', 'N/search', 'N/record', 'N/error', 'N/render', 'N/file', 'N/u
                     terms_and_conditions: entityFields.terms_and_conditions,
                     company_logo_url: entityFields.company_logo_url,
                     bank_details: entityFields.bank_details,
-                    bill_address: entityFields.bill_address
+                    // No invoice means no building to read, so the customer's own address is used.
+                    bill_address: getCustomerBillingAddress(customerId)
                 };
             }
 
@@ -253,60 +261,108 @@ define(['N/query', 'N/search', 'N/record', 'N/error', 'N/render', 'N/file', 'N/u
             headerRow.queries_email = entityFields.queries_email;
             headerRow.queries_whatsapp = entityFields.queries_whatsapp;
             headerRow.terms_and_conditions = entityFields.terms_and_conditions;
-            headerRow.bill_address = entityFields.bill_address;
+            // Property address first - it shows where the tenant currently occupies. The customer's own
+            // address is the fallback (journals and manual invoices often carry no building).
+            headerRow.bill_address = getBuildingAddress(headerRow.building_id) ||
+                getCustomerBillingAddress(customerId);
 
             return headerRow;
         }
 
-        // Per-execution cache of formatted subsidiary addresses, keyed by subsidiary id - same reasoning as
-        // subsidiaryLogoUrlCache below (many customers share a subsidiary).
-        const subsidiaryAddressCache = {};
+        // Per-execution cache of building property addresses, keyed by building id - many tenants share a building.
+        const buildingAddressCache = {};
 
         //-----------------------------------------------
-        //Address block under the customer name - the subsidiary's main address
+        //Address block under the customer name - the Building segment's property address
         //-----------------------------------------------
-        const getSubsidiaryAddress = (subsidiaryId) => {
+        const getBuildingAddress = (buildingId) => {
 
-            if (!subsidiaryId) return '';
+            if (!buildingId) return '';
 
-            if (Object.prototype.hasOwnProperty.call(subsidiaryAddressCache, subsidiaryId)) {
-                return subsidiaryAddressCache[subsidiaryId];
+            if (Object.prototype.hasOwnProperty.call(buildingAddressCache, buildingId)) {
+                return buildingAddressCache[buildingId];
             }
 
             let address = '';
+
+            // Preferred: the segment record queried directly
             try {
-                // Kept out of fillFromSubsidiaryQuery so a failure on the address join can't blank out the
-                // other subsidiary fields. BUILTIN.DF on country gives the name ("South Africa") not the code.
                 const sql =
-                    'SELECT ' +
-                    '    a.addr1                                 AS addr1, ' +
-                    '    a.addr2                                 AS addr2, ' +
-                    '    a.addr3                                 AS addr3, ' +
-                    '    a.city                                  AS city, ' +
-                    '    a.state                                 AS state, ' +
-                    '    a.zip                                   AS zip, ' +
-                    '    BUILTIN.DF(a.country)                   AS country ' +
-                    'FROM subsidiary s, subsidiaryMainAddress a ' +
-                    'WHERE s.mainaddress = a.nkey ' +
-                    `  AND s.id = ${assertId(subsidiaryId)}`;
+                    `SELECT b.${BUILDING_ADDRESS} AS building_address ` +
+                    `FROM ${BUILDING_RECORD} b ` +
+                    `WHERE b.id = ${assertId(buildingId)}`;
 
                 const rows = query.runSuiteQL({query: sql}).asMappedResults();
 
-                if (rows.length) {
-                    const row = rows[0];
-                    // One line per part, with city/state/zip on a single line (e.g. "Bryanston GT 2191").
-                    const cityLine = [row.city, row.state, row.zip].filter(Boolean).join(' ');
-                    address = [row.addr1, row.addr2, row.addr3, cityLine, row.country]
-                        .filter(Boolean)
-                        .join('\n');
+                if (rows.length && rows[0].building_address) {
+                    address = rows[0].building_address;
                 }
 
             } catch (e) {
-                log.error(`Subsidiary address query failed for ${subsidiaryId}`, e.message);
+                log.error(`Building address query failed for building ${buildingId}`, e.message);
             }
 
-            subsidiaryAddressCache[subsidiaryId] = address;
+            // Fallback: read the field off the segment record
+            if (!address) {
+                try {
+                    const fields = search.lookupFields({
+                        type: BUILDING_RECORD,
+                        id: buildingId,
+                        columns: [BUILDING_ADDRESS]
+                    });
+
+                    address = fields[BUILDING_ADDRESS] || '';
+
+                } catch (e) {
+                    log.error(`Building address lookup failed for building ${buildingId}`, e.message);
+                }
+            }
+
+            buildingAddressCache[buildingId] = address;
             return address;
+        }
+
+        //-----------------------------------------------
+        //Address block fallback - the customer's own address, used when the invoice carries no building
+        //-----------------------------------------------
+        const getCustomerBillingAddress = (customerId) => {
+
+            if (!customerId) return '';
+
+            // Preferred: the address flagged as default billing. addrtext is the formatted block as NetSuite renders it.
+            try {
+                const sql =
+                    'SELECT ea.addrtext AS bill_address ' +
+                    'FROM customerAddressbook cab ' +
+                    'JOIN customerAddressbookEntityAddress ea ' +
+                    '       ON ea.nkey = cab.addressbookaddress ' +
+                    `WHERE cab.entity = ${assertId(customerId)} ` +
+                    "  AND cab.defaultbilling = 'T'";
+
+                const rows = query.runSuiteQL({query: sql}).asMappedResults();
+
+                if (rows.length && rows[0].bill_address) {
+                    return rows[0].bill_address;
+                }
+
+            } catch (e) {
+                log.error(`Billing address query failed for customer ${customerId}`, e.message);
+            }
+
+            // Fallback: the customer's default address, whichever that is
+            try {
+                const fields = search.lookupFields({
+                    type: search.Type.CUSTOMER,
+                    id: customerId,
+                    columns: ['defaultaddress']
+                });
+
+                return fields.defaultaddress || '';
+
+            } catch (e) {
+                log.error(`Default address lookup failed for customer ${customerId}`, e.message);
+                return '';
+            }
         }
 
         //-----------------------------------------------
@@ -345,9 +401,7 @@ define(['N/query', 'N/search', 'N/record', 'N/error', 'N/render', 'N/file', 'N/u
                 // Subsidiary's own banking details (custrecord_statement_banking_details) - replaces the old
                 // per-invoice custbody_alf_bank_det_to_print as the source for the Bank Details table, same
                 // "Label: Value" free-text format (see BANK_DETAIL_LABELS/parseBankDetails below).
-                bank_details: '',
-                // Subsidiary's main address, printed under the customer name (see getSubsidiaryAddress).
-                bill_address: ''
+                bank_details: ''
             };
 
             let subsidiaryId = subsidiaryFromInvoice || null;
@@ -390,7 +444,6 @@ define(['N/query', 'N/search', 'N/record', 'N/error', 'N/render', 'N/file', 'N/u
                 // 'logo' is a File-type native field that isn't reliably queryable through SuiteQL, and one
                 // bad column there would silently blank out every other subsidiary field on the statement.
                 values.company_logo_url = getSubsidiaryLogoUrl(subsidiaryId);
-                values.bill_address = getSubsidiaryAddress(subsidiaryId);
             }
 
             return values;
