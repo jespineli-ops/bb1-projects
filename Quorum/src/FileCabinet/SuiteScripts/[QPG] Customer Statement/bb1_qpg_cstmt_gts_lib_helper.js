@@ -21,6 +21,9 @@
  * 08-September-2026    Jared Espineli      Removed the Email Statement job's AUTHOR_ID parameter (sender now
  *                                          resolved per customer) and noted its Scheduled deployment reads
  *                                          SCRIPT_PARAM.CUSTOMER_LIST_SEARCH directly as a Company Preference.
+ * 14-October-2026      Jared Espineli      Added the Email Statement job's CUSTOMER_SEARCH parameter - its Scheduled
+ *                                          deployment now loads its customer list from its own deployment
+ *                                          parameter instead of SCRIPT_PARAM.CUSTOMER_LIST_SEARCH.
  *
  * Copyright (c) 2026 BlueBridge One Business Solutions, All Rights Reserved
  * support@bluebridgeone.com, UK Support: +44 (0)1932 300007 SA Support: +27 (0)10 500 8674
@@ -123,8 +126,8 @@ define(['N/url'],
             // one (task.create()'d from the Suitelet, CUSTOMER_IDS/RUN_ID set per run) and a Scheduled one,
             // customdeploy_bb1_qpg_cstmt_gts_email_mrs (fires on its own recurrence, on the 20th of each month,
             // with CUSTOMER_IDS/RUN_ID/dates left blank - see gts_email_mr.js). The Scheduled deployment sources
-            // its customer list from SCRIPT_PARAM.CUSTOMER_LIST_SEARCH above, not a parameter of its own - that
-            // field is a Company Preference, so any script can read it.
+            // its customer list from its own CUSTOMER_SEARCH deployment parameter - same search data as the
+            // Suitelet's SCRIPT_PARAM.CUSTOMER_LIST_SEARCH, with extra criteria for the scheduled run.
             EMAIL_MR: {
                 SCRIPT_ID: 'customscript_bb1_qpg_cstmt_gts_email_mr',
                 PARAM: {
@@ -132,7 +135,8 @@ define(['N/url'],
                     START_DATE:     'custscript_bb1_qpg_cstmt_eml_start_date',
                     STATEMENT_DATE: 'custscript_bb1_qpg_cstmt_eml_stmnt_date',
                     ROLLUP:         'custscript_bb1_qpg_cstmt_eml_rollup',
-                    RUN_ID:         'custscript_bb1_qpg_cstmt_eml_run_id'
+                    RUN_ID:         'custscript_bb1_qpg_cstmt_eml_run_id',
+                    CUSTOMER_SEARCH: 'custscript_bb1_qpg_cust_search_stmt'
                 }
             }
         }

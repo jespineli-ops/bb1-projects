@@ -11,15 +11,15 @@
  * N/cache, keyed by RUN_ID, for the Suitelet's progress page to poll); and
  * a Scheduled one, customdeploy_bb1_qpg_cstmt_gts_email_mrs (fires on the
  * 20th of each month), which has no CUSTOMER_IDS/RUN_ID/dates set - it
- * instead processes every customer in the Customer List saved search (read
- * off the SCRIPT_PARAM.CUSTOMER_LIST_SEARCH Company Preference, shared with
- * the Suitelet) and defaults its own Start/Statement Date (see
- * getDefaultPeriodDates() in gts_pdf_lib.js).
+ * instead processes every customer in the saved search set on its
+ * EMAIL_MR.PARAM.CUSTOMER_SEARCH deployment parameter and defaults its own
+ * Start/Statement Date (see getDefaultPeriodDates() in gts_pdf_lib.js).
  *
  * Date                 Author              Purpose
  * 07-September-2026    Jared Espineli      Initial Release - emails each marked customer their own statement PDF and reports a send summary for the progress page.
  * 08-September-2026    Jared Espineli      Added the Scheduled-deployment path (customer list/dates fallback, per-customer sender from subsidiary, optional RUN_ID) and logs deploymentId for traceability.
  * 16-September-2026    Jared Espineli      Subject/body now come from the customer's subsidiary Email Template when configured (gts_email_lib.js's mergeEmailTemplate()), falling back to the fixed wording otherwise. The PDF attachment is unaffected either way.
+ * 14-October-2026      Jared Espineli      Customer list saved search now sourced from this script's own deployment parameter (custscript_bb1_qpg_cust_search_stmt) instead of the Suitelet's Customer List search Company Preference.
  *
  * Copyright (c) 2026 BlueBridge One Business Solutions, All Rights Reserved
  * support@bluebridgeone.com, UK Support: +44 (0)1932 300007 SA Support: +27 (0)10 500 8674
@@ -84,17 +84,15 @@ define(['N/runtime', 'N/cache', 'N/search', 'N/log', './bb1_qpg_cstmt_gts_pdf_li
             };
         }
 
-        // Enumerates every customer id in the Customer List saved search - used by the Scheduled deployment,
-        // which has no CUSTOMER_IDS param (that's only set by the Suitelet's on-demand task.create() call).
-        // SCRIPT_PARAM.CUSTOMER_LIST_SEARCH is a Company Preference, so it's readable here even though it's
-        // defined on the Suitelet's script, not this one. Pages in 1000-row chunks since search.run().getRange()
-        // caps at 1000.
+        // Enumerates every customer id in the saved search on this deployment's CUSTOMER_SEARCH parameter - used
+        // by the Scheduled deployment, which has no CUSTOMER_IDS param (that's only set by the Suitelet's
+        // on-demand task.create() call). Pages in 1000-row chunks since search.run().getRange() caps at 1000.
         const getCustomerListSearchIds = () => {
-            const searchId = runtime.getCurrentScript().getParameter({name: _FIELDS.SCRIPT_PARAM.CUSTOMER_LIST_SEARCH});
+            const searchId = runtime.getCurrentScript().getParameter({name: _FIELDS.EMAIL_MR.PARAM.CUSTOMER_SEARCH});
 
             if (!searchId) {
-                log.error('Missing Company Preference',
-                    `${_FIELDS.SCRIPT_PARAM.CUSTOMER_LIST_SEARCH} has no value set - ` +
+                log.error('Missing script parameter',
+                    `${_FIELDS.EMAIL_MR.PARAM.CUSTOMER_SEARCH} has no value set on this deployment - ` +
                     'no CUSTOMER_IDS and no saved search means there are no customers to process.');
                 return [];
             }
@@ -119,7 +117,7 @@ define(['N/runtime', 'N/cache', 'N/search', 'N/log', './bb1_qpg_cstmt_gts_pdf_li
         }
 
         // One map key per customer id - either the marked ids carried from the Suitelet, or (Scheduled
-        // deployment) every customer in CUSTOMER_LIST_SEARCH.
+        // deployment) every customer in the CUSTOMER_SEARCH saved search.
         const getInputData = (inputContext) => {
             try {
                 const customerIds = helperLib.LIB_FX.parseIdListParam(
