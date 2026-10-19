@@ -20,6 +20,7 @@
  * 18-September-2026    Jared Espineli      Bank Details table now sourced from the subsidiary's custrecord_statement_banking_details instead of the per-invoice custbody_alf_bank_det_to_print, so it no longer depends on an invoice existing in the statement period.
  * 12-October-2026      Jared Espineli      Address block under the customer name now sourced from the subsidiary's main address (addr1/addr2/addr3/city/state/zip/country) instead of the customer's default billing address.
  * 15-October-2026      Jared Espineli      Address block now sourced from the Building segment's property address (custrecord_bb1_building_address) on the latest invoice, falling back to the customer's default billing address, then the customer's default address - replaces the subsidiary main address.
+ * 16-October-2026      Jared Espineli      Peach Payments link and logo now sourced from the Building segment (custrecord_bb1_payment_peach_url / custrecord_bb1_peach_payment_qr) on the latest invoice, instead of the subsidiary's custrecord_bb1_peach_payment_url / custrecord_bb1_peach_payment_image.
  *
  * Copyright (c) 2026 BlueBridge One Business Solutions, All Rights Reserved
  * support@bluebridgeone.com, UK Support: +44 (0)1932 300007 SA Support: +27 (0)10 500 8674
@@ -71,6 +72,9 @@ define(['N/query', 'N/search', 'N/record', 'N/error', 'N/render', 'N/file', 'N/u
         // the statement shows where the tenant currently occupies.
         const BUILDING_RECORD = 'customrecord_cseg_bb1_building';
         const BUILDING_ADDRESS = 'custrecord_bb1_building_address';
+        // Building-level Peach Payments link and its clickable logo/QR (File field - holds a File Cabinet id).
+        const BUILDING_PAYMENT_URL = 'custrecord_bb1_payment_peach_url';
+        const BUILDING_PAYMENT_IMAGE = 'custrecord_bb1_peach_payment_qr';
 
         const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June',
             'July', 'August', 'September', 'October', 'November', 'December'];
@@ -252,8 +256,6 @@ define(['N/query', 'N/search', 'N/record', 'N/error', 'N/render', 'N/file', 'N/u
             headerRow.deposit = entityFields.deposit;
             headerRow.entity_vat_no = entityFields.entity_vat_no;
             headerRow.entity_reg_no = entityFields.entity_reg_no;
-            headerRow.payment_url = entityFields.payment_url;
-            headerRow.payment_image_url = entityFields.payment_image_url;
             headerRow.company_logo_url = entityFields.company_logo_url;
             headerRow.customer_entity_id = entityFields.customer_entity_id;
             headerRow.statement_author_id = entityFields.statement_author_id;
@@ -261,65 +263,86 @@ define(['N/query', 'N/search', 'N/record', 'N/error', 'N/render', 'N/file', 'N/u
             headerRow.queries_email = entityFields.queries_email;
             headerRow.queries_whatsapp = entityFields.queries_whatsapp;
             headerRow.terms_and_conditions = entityFields.terms_and_conditions;
+            const buildingFields = getBuildingFields(headerRow.building_id);
+            headerRow.payment_url = buildingFields.payment_url;
+            headerRow.payment_image_url = buildingFields.payment_image_url;
             // Property address first - it shows where the tenant currently occupies. The customer's own
             // address is the fallback (journals and manual invoices often carry no building).
-            headerRow.bill_address = getBuildingAddress(headerRow.building_id) ||
+            headerRow.bill_address = buildingFields.address ||
                 getCustomerBillingAddress(customerId);
 
             return headerRow;
         }
 
-        // Per-execution cache of building property addresses, keyed by building id - many tenants share a building.
-        const buildingAddressCache = {};
+        // Per-execution cache of building fields, keyed by building id - many tenants share a building.
+        const buildingFieldsCache = {};
 
         //-----------------------------------------------
-        //Address block under the customer name - the Building segment's property address
+        //Building segment fields - the property address under the customer name, plus the Peach Payments
+        //link and logo/QR printed below the Bank Details table
         //-----------------------------------------------
-        const getBuildingAddress = (buildingId) => {
+        const getBuildingFields = (buildingId) => {
 
-            if (!buildingId) return '';
+            let values = {address: '', payment_url: '', payment_image_url: ''};
 
-            if (Object.prototype.hasOwnProperty.call(buildingAddressCache, buildingId)) {
-                return buildingAddressCache[buildingId];
+            if (!buildingId) return values;
+
+            if (Object.prototype.hasOwnProperty.call(buildingFieldsCache, buildingId)) {
+                return buildingFieldsCache[buildingId];
             }
 
-            let address = '';
+            let paymentImageId = '';
+            let queried = false;
 
             // Preferred: the segment record queried directly
             try {
                 const sql =
-                    `SELECT b.${BUILDING_ADDRESS} AS building_address ` +
+                    'SELECT ' +
+                    `    b.${BUILDING_ADDRESS}       AS building_address, ` +
+                    `    b.${BUILDING_PAYMENT_URL}   AS payment_url, ` +
+                    // File field - SuiteQL returns the File Cabinet internal id, not a URL.
+                    `    b.${BUILDING_PAYMENT_IMAGE} AS payment_image_id ` +
                     `FROM ${BUILDING_RECORD} b ` +
                     `WHERE b.id = ${assertId(buildingId)}`;
 
                 const rows = query.runSuiteQL({query: sql}).asMappedResults();
 
-                if (rows.length && rows[0].building_address) {
-                    address = rows[0].building_address;
+                if (rows.length) {
+                    values.address = rows[0].building_address || '';
+                    values.payment_url = rows[0].payment_url || '';
+                    paymentImageId = rows[0].payment_image_id || '';
+                    queried = true;
                 }
 
             } catch (e) {
-                log.error(`Building address query failed for building ${buildingId}`, e.message);
+                log.error(`Building query failed for building ${buildingId}`, e.message);
             }
 
-            // Fallback: read the field off the segment record
-            if (!address) {
+            // Fallback: read the fields off the segment record
+            if (!queried) {
                 try {
                     const fields = search.lookupFields({
                         type: BUILDING_RECORD,
                         id: buildingId,
-                        columns: [BUILDING_ADDRESS]
+                        columns: [BUILDING_ADDRESS, BUILDING_PAYMENT_URL, BUILDING_PAYMENT_IMAGE]
                     });
 
-                    address = fields[BUILDING_ADDRESS] || '';
+                    values.address = fields[BUILDING_ADDRESS] || '';
+                    values.payment_url = fields[BUILDING_PAYMENT_URL] || '';
+
+                    // File fields can come back as [{value, text}] or as a plain id, depending on field type.
+                    const image = fields[BUILDING_PAYMENT_IMAGE];
+                    paymentImageId = Array.isArray(image) ? (image.length ? image[0].value : '') : (image || '');
 
                 } catch (e) {
-                    log.error(`Building address lookup failed for building ${buildingId}`, e.message);
+                    log.error(`Building lookup failed for building ${buildingId}`, e.message);
                 }
             }
 
-            buildingAddressCache[buildingId] = address;
-            return address;
+            values.payment_image_url = resolveFileCabinetImageUrl(paymentImageId);
+
+            buildingFieldsCache[buildingId] = values;
+            return values;
         }
 
         //-----------------------------------------------
@@ -379,8 +402,6 @@ define(['N/query', 'N/search', 'N/record', 'N/error', 'N/render', 'N/file', 'N/u
                 // Entity Registration No., distinct from Entity VAT No./Recipient Registration No. - sourced
                 // from the subsidiary's custrecord_alf_company_reg_num field.
                 entity_reg_no: '',
-                payment_url: '',
-                payment_image_url: '',
                 // Subsidiary's own logo (standard "logo" field) - falls back to LOGO_URL when not configured.
                 company_logo_url: '',
                 // Customer's own Entity ID (NetSuite's customer-facing number, e.g. "C000123") - printed as the
@@ -432,10 +453,10 @@ define(['N/query', 'N/search', 'N/record', 'N/error', 'N/render', 'N/file', 'N/u
 
             if (!subsidiaryId) {
                 log.error('No subsidiary resolved',
-                    `Entity VAT No and the payment link cannot be fetched for customer ${customerId}`);
+                    `Entity VAT No and other subsidiary fields cannot be fetched for customer ${customerId}`);
             }
 
-            // Subsidiary record - source of the VAT number, registration number and payment URL.
+            // Subsidiary record - source of the VAT number, registration number and bank details.
             // 'federalidnumber' isn't a valid search.lookupFields column on Subsidiary, so this goes straight
             // through SuiteQL instead (no joins - a join from transaction to subsidiary fails on this account).
             if (subsidiaryId) {
@@ -459,9 +480,6 @@ define(['N/query', 'N/search', 'N/record', 'N/error', 'N/render', 'N/file', 'N/u
                     'SELECT ' +
                     '    s.federalidnumber                       AS entity_vat_no, ' +
                     '    s.custrecord_alf_company_reg_num         AS entity_reg_no, ' +
-                    '    s.custrecord_bb1_peach_payment_url       AS payment_url, ' +
-                    // List/Record(File) fields - SuiteQL returns the File Cabinet internal id, not a URL.
-                    '    s.custrecord_bb1_peach_payment_image     AS payment_image_id, ' +
                     // Employee this subsidiary's statement emails are sent as (List/Record(Employee) field).
                     '    s.custrecord_bb1_cust_statement_author   AS statement_author_id, ' +
                     // Email Template this subsidiary's statement emails are merged from (List/Record(Email Template) field).
@@ -478,9 +496,6 @@ define(['N/query', 'N/search', 'N/record', 'N/error', 'N/render', 'N/file', 'N/u
                 if (rows.length) {
                     values.entity_vat_no = values.entity_vat_no || rows[0].entity_vat_no || '';
                     values.entity_reg_no = values.entity_reg_no || rows[0].entity_reg_no || '';
-                    values.payment_url = values.payment_url || rows[0].payment_url || '';
-                    values.payment_image_url = values.payment_image_url ||
-                        resolveFileCabinetImageUrl(rows[0].payment_image_id);
                     values.statement_author_id = rows[0].statement_author_id || '';
                     values.email_template_id = rows[0].email_template_id || '';
                     values.queries_email = rows[0].queries_email || '';
@@ -943,8 +958,8 @@ define(['N/query', 'N/search', 'N/record', 'N/error', 'N/render', 'N/file', 'N/u
         const LOGO_HEIGHT_PT = 100;
 
         // Peach Payments logo size in points, shown below the Whatsapp line.
-        const PEACH_LOGO_WIDTH_PT = 48;
-        const PEACH_LOGO_HEIGHT_PT = 48;
+        const PEACH_LOGO_WIDTH_PT = 72;
+        const PEACH_LOGO_HEIGHT_PT = 72;
 
         //-----------------------------------------------
         //Formatting helpers
@@ -1225,8 +1240,8 @@ define(['N/query', 'N/search', 'N/record', 'N/error', 'N/render', 'N/file', 'N/u
         //Bank details table - Account Name/Bank/Branch No./Account No., parsed from the subsidiary's
         //custrecord_statement_banking_details (whose own field labels are Account Name/Bank Name/Branch/
         //Account Number - see BANK_DETAIL_LABELS), plus a highlighted Payment Reference column from the
-        //customer's own Entity ID. The clickable payment logo (subsidiary's custrecord_bb1_peach_payment_image,
-        //linking to custrecord_bb1_peach_payment_url) prints below, left-aligned.
+        //customer's own Entity ID. The clickable payment logo (the invoice's Building custrecord_bb1_peach_payment_qr,
+        //linking to custrecord_bb1_payment_peach_url) prints below, left-aligned.
         //-----------------------------------------------
         const buildBankDetailsSection = (statement) => {
             const bank = parseBankDetails(statement.header.bank_details);
