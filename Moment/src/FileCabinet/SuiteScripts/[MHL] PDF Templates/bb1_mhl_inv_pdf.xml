@@ -238,37 +238,39 @@
             <hr />
         </#if>
 
+        <#assign showAed = subsidiary.country?has_content && subsidiary.country?string == "United Arab Emirates" && record.custbody_bb1_uae_bank_roe?has_content>
         <table class="total" style="width: 100%; margin-top: 10px;">
+            <#if showAed>
+                <#assign uaeRoe = record.custbody_bb1_uae_bank_roe>
+                <tr>
+                    <td colspan="4" style="font-size: 8pt;"><strong>UAE Dirham (AED) Conversion Summary (CBUAE Rate: ${uaeRoe})</strong></td>
+                </tr>
+            </#if>
             <tr>
-                <td style="width: 45%;">&nbsp;</td>
+                <td style="width: 25%;"><#if showAed><strong>Net Amount in AED</strong><#else>&nbsp;</#if></td>
+                <td align="right" style="width: 20%;"><#if showAed>AED ${(record.subtotal * uaeRoe)?string(",##0.00")}<#else>&nbsp;</#if></td>
                 <td align="right" style="width: 30%;"><strong>${record.subtotal@label}</strong></td>
                 <td align="right" style="width: 25%;">${record.subtotal?replace("¤", record.currency + " ")}</td>
             </tr>
             <tr>
-                <td>&nbsp;</td>
+                <td><#if showAed><strong>VAT Amount in AED</strong><#else>&nbsp;</#if></td>
+                <td align="right"><#if showAed>AED ${(record.taxtotal * uaeRoe)?string(",##0.00")}<#else>&nbsp;</#if></td>
                 <td align="right"><strong>${record.taxtotal@label} (${record.taxrate}%)</strong></td>
                 <td align="right">${record.taxtotal?replace("¤", record.currency + " ")}</td>
             </tr>
-            <#if subsidiary.country?has_content && subsidiary.country?string == "United Arab Emirates" && record.custbody_bb1_uae_bank_roe?has_content>
-                <#assign uaeRoe = record.custbody_bb1_uae_bank_roe>
+            <#if showAed>
                 <tr>
-                    <td>&nbsp;</td>
-                    <td align="right"><strong>Net Amount in AED</strong></td>
-                    <td align="right">AED ${(record.subtotal * uaeRoe)?string(",##0.00")}</td>
-                </tr>
-                <tr>
-                    <td>&nbsp;</td>
-                    <td align="right"><strong>VAT Amount in AED</strong></td>
-                    <td align="right">AED ${(record.taxtotal * uaeRoe)?string(",##0.00")}</td>
-                </tr>
-                <tr>
-                    <td>&nbsp;</td>
-                    <td align="right"><strong>Gross Total In AED</strong></td>
+                    <td><strong>Gross Total In AED</strong></td>
                     <td align="right">AED ${(record.total * uaeRoe)?string(",##0.00")}</td>
+                    <td colspan="2">&nbsp;</td>
+                </tr>
+                <tr>
+                    <td colspan="2" style="font-size: 8pt;">Exchange Rate Source: Central Bank of the UAE (CBUAE)<br />daily reference rate on the date of supply (${record.trandate})</td>
+                    <td colspan="2">&nbsp;</td>
                 </tr>
             </#if>
             <tr class="totalrow">
-                <td>&nbsp;</td>
+                <td colspan="2">&nbsp;</td>
                 <td align="right"><strong>${record.total@label}</strong></td>
                 <td align="right">${record.total?replace("¤", record.currency + " ")}</td>
             </tr>
