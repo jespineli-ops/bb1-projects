@@ -1,6 +1,16 @@
 <?xml version="1.0"?>
 <!DOCTYPE pdf PUBLIC "-//big.faceless.org//report" "report-1.1.dtd">
 <pdf>
+<#-- Picking Ticket data is built by bb1_jkr_prod_order_print_sl.js and stored as JSON on the
+     Project Order header (custrecord_bb1_prjord_pdf_data): {salesorder: {...}, lines: [...]} -
+     assigned before the header/footer macros so they can use it too -->
+<#if customrecord_bb1_prjord.custrecord_bb1_prjord_pdf_data?has_content>
+<#assign custPDFdata = customrecord_bb1_prjord.custrecord_bb1_prjord_pdf_data?eval>
+<#else>
+<#assign custPDFdata = {"salesorder": {}, "lines": []}>
+</#if>
+<#assign pickSalesOrder = custPDFdata.salesorder!{}>
+<#assign pickLines = custPDFdata.lines![]>
     <head>
         <link name="NotoSans" type="font" subtype="truetype" src="${nsfont.NotoSans_Regular}" src-bold="${nsfont.NotoSans_Bold}" src-italic="${nsfont.NotoSans_Italic}" src-bolditalic="${nsfont.NotoSans_BoldItalic}" bytes="2" />
         <#if .locale == "zh_CN">
@@ -25,20 +35,20 @@
                         <span class="nameandaddress">${companyInformation.companyName}</span><br />
                         <span class="nameandaddress">${companyInformation.addressText}</span>
                     </td>
-                    <td align="right"><span class="title">${salesorder@title}</span></td>
+                    <td align="right"><span class="title">Sales Order</span></td>
                 </tr>
                 <tr>
-                    <td align="right"><span class="number">#${salesorder.tranid}</span></td>
+                    <td align="right"><span class="number">#${pickSalesOrder.tranid!''}</span></td>
                 </tr>
                 <tr>
-                    <td align="right">${salesorder.trandate}</td>
+                    <td align="right">${pickSalesOrder.trandate!''}</td>
                 </tr>
             </table>
         </macro>
         <macro id="nlfooter">
             <table class="footer" style="width: 100%;">
                 <tr>
-                    <td><barcode codetype="code128" showtext="true" value="${salesorder.tranid}"/></td>
+                    <td><barcode codetype="code128" showtext="true" value="${pickSalesOrder.tranid!''}"/></td>
                     <td align="right"><pagenumber/> of <totalpages/></td>
                 </tr>
             </table>
@@ -124,48 +134,46 @@
 <body header="nlheader" header-height="10%" footer="nlfooter" footer-height="20pt" padding="0.5in 0.5in 0.5in 0.5in" size="A4">
     <table style="width: 100%; margin-top: 10px;">
         <tr>
-            <td class="addressheader"><strong>${salesorder.shipaddress@label}</strong></td>
+            <td class="addressheader"><strong>Ship To</strong></td>
         </tr>
         <tr>
-            <td class="address">${salesorder.shipaddress}</td>
+            <td class="address"><#list (pickSalesOrder.shipaddress!'')?split("\n") as addressLine>${addressLine}<#sep><br /></#sep></#list></td>
         </tr>
     </table>
     <table class="body" style="width: 100%; margin-top: 10px;">
         <tr>
-            <th>${salesorder.shipmethod@label}</th>
+            <th>Shipping Method</th>
         </tr>
         <tr>
-            <td>${salesorder.shipmethod}</td>
+            <td>${pickSalesOrder.shipmethod!''}</td>
         </tr>
     </table>
-    <#if salesorder.item?has_content>
+    <#if pickLines?has_content>
     <table class="itemtable" style="width: 100%; margin-top: 10px;">
         <!-- start items -->
-        <#list salesorder.item as item>
-            <#if item_index==0>
+        <#list pickLines as line>
+            <#if line_index==0>
             <thead>
                 <tr>
-                    <th style="width: 49.9764%;" colspan="4">${item.item@label}</th>
-                    <th style="width: 12.4892%;">
-                        <p>Shelf Number</p>
-                    </th>
-                    <th style="width: 12.4892%;">${item.quantity@label}</th>
-                    <th style="width: 12.4892%;">${item.units@label}</th>
-                    <th style="width: 12.4892%;">Qty. Picked</th>
+                    <th style="width: 20%;">Work Order #</th>
+                    <th style="width: 44%;">Item</th>
+                    <th style="width: 18%;">Qty. Committed</th>
+                    <th style="width: 18%;">Quantity</th>
                 </tr>
             </thead>
             </#if>
             <tr>
-                <td style="width: 49.9764%;" colspan="4"><span class="itemname">${item.item}</span><br />${item.description}</td>
-                <td style="width: 12.4892%;">${item.custcol_bb1_shelf_number}</td>
-                <td style="text-align: right; width: 12.4892%;">
-                    <p style="text-align: right;">${item.quantitycommitted}</p>
+                <td style="width: 20%;">${line.workorderno!''}</td>
+                <td style="width: 44%;"><span class="itemname">${line.item!''}</span></td>
+                <td style="text-align: right; width: 18%;">
+                    <p style="text-align: right;">${line.quantitycommitted!''}</p>
                 </td>
-                <td style="width: 12.4892%;">${item.units}</td>
-                <td style="width: 12.4892%; border: 1px solid rgb(0, 0, 0);">&nbsp;</td>
+                <td style="text-align: right; width: 18%;">
+                    <p style="text-align: right;">${line.quantity!''}</p>
+                </td>
             </tr>
             <tr>
-                <td style="width: 99.933%;" colspan="8"><hr /><br />${item.options}</td>
+                <td style="width: 100%;" colspan="4"><hr /></td>
             </tr>
         </#list>
         <!-- end items -->

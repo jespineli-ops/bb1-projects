@@ -11,9 +11,9 @@
  * so concurrently queued jobs don't overwrite each other's data
  *
  * Also queues a single bb1_jkr_pick_doc_proj_order.xml Picking Ticket print job
- * (Picking Ticket button) straight against the Project Order's linked Sales Order -
- * that template reads its fields directly off the Sales Order record, so no PDF
- * data source needs to be built/stored first
+ * (Picking Ticket button) against the Project Order - its linked Sales Order header
+ * values plus the Project Order Line saved search rows are stored as JSON on the
+ * Project Order header (custrecord_bb1_prjord_pdf_data) for the template to read
  *
  * Called By: bb1_jkr_prod_order_print_ue.js (Manufacture Document / Picking Ticket buttons)
  * Calls: bb1_qz_lib_public (SuiteApp com.bluebridgeonecouk.qztray)
@@ -21,6 +21,8 @@
  * Date                Author              Purpose
  * 29-September-2026   Jared Espineli     Initial Release
  * 01-October-2026      Jared Espineli     Added Picking Ticket print job
+ * 07-October-2026      Jared Espineli     Picking Ticket lines now come from the Project Order Line saved search
+ *                                         (custscript_bb1_jkr_pck_ln_sea), stored on the Project Order header PDF data
  *
  * Copyright (c) 2026 BlueBridge One Business Solutions, All Rights Reserved
  * support@bluebridgeone.com, UK Support: +44 (0)1932 300007 SA Support: +27 (0)10 500 8674
@@ -49,6 +51,9 @@ define(['N/record', 'N/search', 'N/runtime', 'N/url', 'N/error',
 
         //deployment script parameter holding bb1_jkr_pick_doc_proj_order.xml's internal id
         var SCRIPT_PARAM_PICK_TEMPLATE_ID = 'custscript_bb1_jkr_prod_order_pick_tmpl';
+
+        //deployment script parameter holding the Project Order Line saved search used by the Picking Ticket
+        var SCRIPT_PARAM_PICK_LINE_SEARCH_ID = 'custscript_bb1_jkr_pck_ln_sea';
 
         var QZ_PRINT_PLUGIN_SCRIPT_ID = 'customscript_bb1_qz_pi_record';
 
@@ -369,7 +374,14 @@ define(['N/record', 'N/search', 'N/runtime', 'N/url', 'N/error',
                     });
                 }
 
-                queuePickingTicketPrint(salesOrderId, templateId);
+                var pickData = {
+                    salesorder: getPickingTicketSalesOrder(salesOrderId),
+                    lines: getPickingTicketLines(projOrderId)
+                };
+
+                storePickingTicketData(projOrderId, pickData);
+
+                queuePickingTicketPrint(projOrderId, templateId);
 
                 var redirectUrl = url.resolveRecord({
                     recordType: PROJ_ORDER.REC_ID,
@@ -387,15 +399,124 @@ define(['N/record', 'N/search', 'N/runtime', 'N/url', 'N/error',
             }
         }
 
-        //queues the Picking Ticket print job directly against the linked Sales Order record -
-        //bb1_jkr_pick_doc_proj_order.xml reads its fields straight off the Sales Order, so
-        //(unlike the Manufacture Document) no PDF data source needs to be built/stored first
-        function queuePickingTicketPrint(salesOrderId, templateId) {
+        //Sales Order header values the Picking Ticket prints (number/date/ship to/ship method) -
+        //stored raw, as the template escapes custPDFdata values itself. The ship to address
+        //keeps its line breaks (\n), which the template splits into <br /> separated lines
+        function getPickingTicketSalesOrder(salesOrderId) {
+            var salesOrderFields = search.lookupFields({
+                type: search.Type.SALES_ORDER,
+                id: salesOrderId,
+                columns: ['tranid', 'trandate', 'shipaddress', 'shipmethod']
+            });
+
+            var shipMethod = salesOrderFields.shipmethod;
+
+            return {
+                tranid: salesOrderFields.tranid,
+                trandate: salesOrderFields.trandate,
+                shipaddress: (salesOrderFields.shipaddress || '').replace(/\r/g, ''),
+                shipmethod: shipMethod && shipMethod.length ? shipMethod[0].text : ''
+            };
+        }
+
+        //runs the Picking Ticket Project Order Line saved search (custscript_bb1_jkr_pck_ln_sea),
+        //restricted to this Project Order's lines, and returns one row per line with the
+        //Work Order # / Item / Quantity Committed / Quantity columns. Columns are matched by
+        //name/join rather than position so reordering them in the saved search is safe
+        function getPickingTicketLines(projOrderId) {
+            var LINE = PROJ_ORDER.SUBLIST.LINE;
+            var searchId = runtime.getCurrentScript().getParameter({name: SCRIPT_PARAM_PICK_LINE_SEARCH_ID});
+
+            if (!searchId) {
+                throw error.create({
+                    name: 'BB1_PICKTICKET_NO_LINE_SEARCH',
+                    message: SCRIPT_PARAM_PICK_LINE_SEARCH_ID + ' is empty on the deployment'
+                });
+            }
+
+            var lineSearchObj = search.load({id: searchId});
+
+            //only this Project Order's lines (custrecord_bb1_prjord_l_prjo)
+            lineSearchObj.filters.push(search.createFilter({
+                name: LINE.PARENT,
+                operator: search.Operator.ANYOF,
+                values: projOrderId
+            }));
+
+            var columns = {
+                workOrder: findSearchColumn(lineSearchObj, LINE.WO, null),
+                item: findSearchColumn(lineSearchObj, 'item', LINE.WO),
+                quantityCommitted: findSearchColumn(lineSearchObj, 'quantitycommitted', LINE.WO),
+                quantity: findSearchColumn(lineSearchObj, 'quantity', LINE.WO)
+            };
+
+            var lines = [];
+
+            lineSearchObj.run().each(function (result) {
+                lines.push({
+                    workorderno: result.getText(columns.workOrder),
+                    item: result.getText(columns.item),
+                    quantitycommitted: result.getValue(columns.quantityCommitted),
+                    quantity: result.getValue(columns.quantity)
+                });
+
+                return true;
+            });
+
+            log.debug('Picking Ticket lines found', {projOrderId: projOrderId, searchId: searchId, lines: lines});
+
+            return lines;
+        }
+
+        //finds a saved search column by name and (optional) join - joins come back upper-cased
+        //from search.load, so they're compared case-insensitively
+        function findSearchColumn(searchObj, name, join) {
+            var wantedJoin = (join || '').toUpperCase();
+
+            for (var i = 0; i < searchObj.columns.length; i++) {
+                var column = searchObj.columns[i];
+
+                if (column.name === name && (column.join || '').toUpperCase() === wantedJoin) {
+                    return column;
+                }
+            }
+
+            throw error.create({
+                name: 'BB1_PICKTICKET_MISSING_COLUMN',
+                message: 'Picking Ticket line search ' + searchObj.id + ' is missing column ' + (join ? join + '.' : '') + name
+            });
+        }
+
+        //stores the Picking Ticket data as JSON on the Project Order header
+        //(custrecord_bb1_prjord_pdf_data) - bb1_jkr_pick_doc_proj_order.xml reads it straight
+        //off the loaded Project Order and parses it into custPDFdata with FreeMarker's ?eval.
+        //Only one Picking Ticket job is queued per click, so the shared header field is safe here
+        function storePickingTicketData(projOrderId, pickData) {
+            try {
+                record.submitFields({
+                    type: PROJ_ORDER.REC_ID,
+                    id: projOrderId,
+                    values: {
+                        [PROJ_ORDER.HEADER.PDF_DATA]: JSON.stringify(pickData)
+                    }
+                });
+            } catch (e) {
+                log.error('storePickingTicketData failed for Project Order ' + projOrderId, e.message);
+                throw error.create({
+                    name: 'BB1_PICKTICKET_DATA_STORE_FAILED',
+                    message: 'Could not store PDF data on Project Order ' + projOrderId + ': ' + e.message
+                });
+            }
+        }
+
+        //queues the Picking Ticket print job against the Project Order record, whose
+        //custrecord_bb1_prjord_pdf_data field holds the data stored above
+        function queuePickingTicketPrint(projOrderId, templateId) {
             var jobData = {
                 type: 'RECORD',
                 templateid: Number(templateId),
                 records: [
-                    {type: 'salesorder', id: Number(salesOrderId)}
+                    {type: PROJ_ORDER.REC_ID, id: Number(projOrderId)}
                 ],
                 format: 'PDF'
             };
