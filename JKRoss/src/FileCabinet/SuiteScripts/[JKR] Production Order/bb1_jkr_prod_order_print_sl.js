@@ -23,6 +23,10 @@
  * 01-October-2026      Jared Espineli     Added Picking Ticket print job
  * 07-October-2026      Jared Espineli     Picking Ticket lines now come from the Project Order Line saved search
  *                                         (custscript_bb1_jkr_pck_ln_sea), stored on the Project Order header PDF data
+ * 21-October-2026     Jared Espineli     Print jobs now go to the Project Order's Default Printer
+ *                                         (custrecord_bb1_prjord_dflt_printer) instead of hardcoded printer 5
+ * 23-October-2026     Jared Espineli     Print jobs now go to the Default Printer of the user who clicked the
+ *                                         button (employee custentity_bb1_jkr_user_dflt_printer), with audit logging
  *
  * Copyright (c) 2026 BlueBridge One Business Solutions, All Rights Reserved
  * support@bluebridgeone.com, UK Support: +44 (0)1932 300007 SA Support: +27 (0)10 500 8674
@@ -81,6 +85,7 @@ define(['N/record', 'N/search', 'N/runtime', 'N/url', 'N/error',
             log.debug('Manufacture Document requested', {projOrderId: projOrderId, templateId: templateId});
 
             try {
+                var printerId = getUserPrinter('Manufacture Document', projOrderId);
                 var salesOrderId = getSalesOrderId(projOrderId);
                 var pdfDataSource = buildPdfDataSource(salesOrderId);
                 var salesOrderObj = pdfDataSource.salesorders[0];
@@ -109,7 +114,7 @@ define(['N/record', 'N/search', 'N/runtime', 'N/url', 'N/error',
                         }]
                     });
 
-                    queueManufactureDocumentPrint(lineId, templateId);
+                    queueManufactureDocumentPrint(lineId, templateId, printerId);
                 });
 
                 var redirectUrl = url.resolveRecord({
@@ -126,6 +131,30 @@ define(['N/record', 'N/search', 'N/runtime', 'N/url', 'N/error',
                     message: 'Could not render the Manufacture Document for Project Order ' + projOrderId + ': ' + e.message
                 });
             }
+        }
+
+        //QZ printer internal id from the Default Printer (custentity_bb1_jkr_user_dflt_printer) on the
+        //employee record of the user who clicked the print button - this Suitelet is opened in that
+        //user's session, so they are the current user
+        function getUserPrinter(docLabel, projOrderId) {
+            var userId = runtime.getCurrentUser().id;
+            var printerId = helperLib.LIB_FX.getUserDefaultPrinter();
+
+            log.audit(docLabel + ' print triggered', {
+                documentType: docLabel,
+                projOrderId: projOrderId,
+                userId: userId,
+                printerId: printerId
+            });
+
+            if (!printerId) {
+                throw error.create({
+                    name: 'BB1_PRINT_NO_DEFAULT_PRINTER',
+                    message: 'User ' + userId + ' has no Default Printer (' + helperLib._CONFIG.EMPLOYEE.DFLT_PRINTER + ') on their employee record'
+                });
+            }
+
+            return Number(printerId);
         }
 
         //Sales Order internal id linked to the Project Order (custrecord_bb1_prjord_so)
@@ -337,7 +366,7 @@ define(['N/record', 'N/search', 'N/runtime', 'N/url', 'N/error',
         //queues the print job through the QZ library/plugin, against the Work Order's Project
         //Order Line record - templateid/records[].id must be numeric (not the string/search
         //result ids used elsewhere) to match the QZ RECORD job schema
-        function queueManufactureDocumentPrint(lineId, templateId) {
+        function queueManufactureDocumentPrint(lineId, templateId, printerId) {
             var jobData = {
                 type: 'RECORD',
                 templateid: Number(templateId),
@@ -348,7 +377,7 @@ define(['N/record', 'N/search', 'N/runtime', 'N/url', 'N/error',
             };
 
             bb1qz.AddJobToQueue(
-                5,
+                printerId,
                 QZ_PRINT_PLUGIN_SCRIPT_ID,
                 'Manufacture Document Printing',
                 jobData,
@@ -365,6 +394,7 @@ define(['N/record', 'N/search', 'N/runtime', 'N/url', 'N/error',
             log.debug('Picking Ticket requested', {projOrderId: projOrderId, templateId: templateId});
 
             try {
+                var printerId = getUserPrinter('Picking Ticket', projOrderId);
                 var salesOrderId = getSalesOrderId(projOrderId);
 
                 if (!salesOrderId) {
@@ -381,7 +411,7 @@ define(['N/record', 'N/search', 'N/runtime', 'N/url', 'N/error',
 
                 storePickingTicketData(projOrderId, pickData);
 
-                queuePickingTicketPrint(projOrderId, templateId);
+                queuePickingTicketPrint(projOrderId, templateId, printerId);
 
                 var redirectUrl = url.resolveRecord({
                     recordType: PROJ_ORDER.REC_ID,
@@ -511,7 +541,7 @@ define(['N/record', 'N/search', 'N/runtime', 'N/url', 'N/error',
 
         //queues the Picking Ticket print job against the Project Order record, whose
         //custrecord_bb1_prjord_pdf_data field holds the data stored above
-        function queuePickingTicketPrint(projOrderId, templateId) {
+        function queuePickingTicketPrint(projOrderId, templateId, printerId) {
             var jobData = {
                 type: 'RECORD',
                 templateid: Number(templateId),
@@ -522,7 +552,7 @@ define(['N/record', 'N/search', 'N/runtime', 'N/url', 'N/error',
             };
 
             bb1qz.AddJobToQueue(
-                5,
+                printerId,
                 QZ_PRINT_PLUGIN_SCRIPT_ID,
                 'Picking Ticket Printing',
                 jobData,

@@ -7,17 +7,23 @@
  *
  * Date              Author              Purpose
  * 23-September-2026  Jared Espineli     Initial Release
+ * 21-October-2026    Jared Espineli     Project Order Default Printer set from the current user's
+ *                                       employee record on create
+ * 23-October-2026    Jared Espineli     getUserDefaultPrinter exposed for the print Suitelet
  *
  * Copyright (c) 2026 BlueBridge One Business Solutions, All Rights Reserved
  * support@bluebridgeone.com, UK Support: +44 (0)1932 300007 SA Support: +27 (0)10 500 8674
  */
-define(['N/record', 'N/search', 'N/format'],
-    (record, search, format) => {
+define(['N/record', 'N/search', 'N/format', 'N/runtime'],
+    (record, search, format, runtime) => {
         const _CONFIG = {
             SCRIPTS: {
                 PARAM: {
                     WO_SEARCH: 'custscript_bb1_jkr_wo_proj_ord_sea'
                 }
+            },
+            EMPLOYEE: {
+                DFLT_PRINTER: 'custentity_bb1_jkr_user_dflt_printer'
             },
             HEADER: {
                 STATUS: 'status',
@@ -40,7 +46,8 @@ define(['N/record', 'N/search', 'N/format'],
                     STATUS: 'custrecord_bb1_prjord_status',
                     TOTAL_WO: 'custrecord_bb1_prjord_wo',
                     TOTAL_WO_COMPLETED: 'custrecord_bb1_prjord_wo_comp',
-                    PDF_DATA: 'custrecord_bb1_prjord_pdf_data'
+                    PDF_DATA: 'custrecord_bb1_prjord_pdf_data',
+                    DFLT_PRINTER: 'custrecord_bb1_prjord_dflt_printer'
                 },
                 SUBLIST: {
                     LINE: {
@@ -148,6 +155,11 @@ define(['N/record', 'N/search', 'N/format'],
             projOrderRec.setValue({fieldId: projOrderFields.TOTAL_WO, value: totalWorkOrders});
             projOrderRec.setValue({fieldId: projOrderFields.STATUS, value: 1}); //default to open upon creation
 
+            let defaultPrinter = LIB_FX.getUserDefaultPrinter();
+            if(defaultPrinter){
+                projOrderRec.setValue({fieldId: projOrderFields.DFLT_PRINTER, value: defaultPrinter});
+            }
+
             let idProjOrder = projOrderRec.save();
             log.debug('createProjOrder', 'Project Order ' + idProjOrder + ' created from Sales Order ' + salesOrderId + ' with ' + totalWorkOrders + ' Work Order link(s)');
 
@@ -163,6 +175,31 @@ define(['N/record', 'N/search', 'N/format'],
             LIB_FX.setProjOrderLines(idProjOrder, salesOrderId, idWoSearch);
 
             return idProjOrder;
+        }
+
+        //Default Printer on the current user's employee record, or null when the user isn't an
+        //employee (e.g. -4 system/web services contexts) or has none set
+        LIB_FX.getUserDefaultPrinter = () => {
+            let userId = runtime.getCurrentUser().id;
+
+            if(!userId || userId < 0){
+                log.debug('getUserDefaultPrinter', 'No employee for current user ' + userId + ' - Default Printer left blank');
+                return null;
+            }
+
+            try {
+                let employeeFields = search.lookupFields({
+                    type: search.Type.EMPLOYEE,
+                    id: userId,
+                    columns: [_CONFIG.EMPLOYEE.DFLT_PRINTER]
+                });
+
+                let defaultPrinter = employeeFields[_CONFIG.EMPLOYEE.DFLT_PRINTER];
+                return defaultPrinter && defaultPrinter.length ? defaultPrinter[0].value : null;
+            } catch (e) {
+                log.error('getUserDefaultPrinter failed for user ' + userId, e.message);
+                return null;
+            }
         }
 
         //converts a search result's date column string to a Date, or null when the column is empty
