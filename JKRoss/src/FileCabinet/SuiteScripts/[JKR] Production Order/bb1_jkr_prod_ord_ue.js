@@ -9,6 +9,7 @@
  *                                         creates the pick-data records printed by the
  *                                         bb1_jkr_ir_pick_doc_wfa.js Workflow Action Script (see
  *                                         bb1_jkr_ir_pick_doc_helper_lib.js)
+ * 20-October-2026     Jared Espineli     Added COPY as a supported context for Item Receipt
  *
  * Copyright (c) 2026 BlueBridge One Business Solutions, All Rights Reserved
  * support@bluebridgeone.com, UK Support: +44 (0)1932 300007 SA Support: +27 (0)10 500 8674
@@ -38,15 +39,16 @@ define(['N/record', 'N/runtime', 'N/error', './bb1_jkr_prod_ord_helper_lib',
 
             //-----------------------------------------------
             //Item Receipt - own try/catch so a failure here is never reported under the Sales
-            //Order flow's PROJ_ORDER_CREATION_FAILED error name below. CREATE only - an edit to
-            //an existing Item Receipt shouldn't re-run this and create duplicate pick-data
+            //Order flow's PROJ_ORDER_CREATION_FAILED error name below. CREATE/COPY only - an edit
+            //to an existing Item Receipt shouldn't re-run this and create duplicate pick-data
             //records for commitments already handled.
             //-----------------------------------------------
             if (newRecord.type === record.Type.ITEM_RECEIPT) {
                 log.debug('afterSubmit - Item Receipt', {itemReceiptId: newRecord.id, type: scriptContext.type});
 
-                if (scriptContext.type !== scriptContext.UserEventType.CREATE) {
-                    log.debug('afterSubmit - Item Receipt', 'Not CREATE - skipping');
+                if (scriptContext.type !== scriptContext.UserEventType.CREATE &&
+                    scriptContext.type !== scriptContext.UserEventType.COPY) {
+                    log.debug('afterSubmit - Item Receipt', 'Not CREATE/COPY - skipping');
                     return;
                 }
 
