@@ -90,6 +90,8 @@ define(['N/ui/serverWidget', 'N/record', 'N/log', 'N/https', 'N/file', 'N/search
                             filters: [
                                 ["mainline", "is", "T"],
                                 "AND",
+                                ["status", "anyof", "ItemShip:A"], // Picked only
+                                "AND",
                                 ifFilters
                             ],
                             columns: [
@@ -108,6 +110,7 @@ define(['N/ui/serverWidget', 'N/record', 'N/log', 'N/https', 'N/file', 'N/search
                         var fulfillments = [];
                         var ifStatuses = {};
                         var ifBoxCounts = {};
+                        var pickedTranIds = {};
 
                         itemfulfillmentSearch.run().each(function (result) {
                             fulfillmentID = result.getValue('internalid');
@@ -116,6 +119,7 @@ define(['N/ui/serverWidget', 'N/record', 'N/log', 'N/https', 'N/file', 'N/search
                             fulfillments.push(fulfillmentID);
                             ifStatuses[fulfillmentID] = ifStatus;
                             ifBoxCounts[fulfillmentID] = boxCounts[result.getValue('tranid')] || 1;
+                            pickedTranIds[result.getValue('tranid')] = true;
 
                             log.debug("IF ID", fulfillmentID);
                             log.debug("IF Status", ifStatus);
@@ -123,6 +127,63 @@ define(['N/ui/serverWidget', 'N/record', 'N/log', 'N/https', 'N/file', 'N/search
 
                             return true;
                         });
+
+                        // Log IFs that were skipped because they are not in Picked status
+                        var skippedIfArr = ifArr.filter(function (num) {
+                            return !pickedTranIds[num];
+                        });
+
+                        if (skippedIfArr.length > 0) {
+                            var skippedFilters = [];
+
+                            skippedIfArr.forEach(function (num, index) {
+                                if (index > 0) {
+                                    skippedFilters.push("OR");
+                                }
+                                skippedFilters.push(["tranid", "is", num]);
+                            });
+
+                            var shippedTranIds = {};
+
+                            search.create({
+                                type: "itemfulfillment",
+                                filters: [
+                                    ["mainline", "is", "T"],
+                                    "AND",
+                                    ["status", "anyof", "ItemShip:C"], // Shipped
+                                    "AND",
+                                    skippedFilters
+                                ],
+                                columns: [
+                                    search.createColumn({ name: "internalid", label: "Internal ID" }),
+                                    search.createColumn({ name: "tranid", label: "Document Number" })
+                                ]
+                            }).run().each(function (result) {
+                                shippedTranIds[result.getValue('tranid')] = true;
+
+                                log.audit("IF Skipped - Already Shipped", "IF# " + result.getValue('tranid') + " (ID " + result.getValue('internalid') + ")");
+
+                                return true;
+                            });
+
+                            skippedIfArr.forEach(function (num) {
+                                if (!shippedTranIds[num]) {
+                                    log.audit("IF Skipped - Not Picked or Not Found", "IF# " + num);
+                                }
+                            });
+                        }
+
+                        if (fulfillments.length === 0) {
+                            log.audit("No Picked Item Fulfillments", "Nothing to update for: " + ifNum);
+
+                            context.response.write(JSON.stringify({
+                                success: false,
+                                error: "No Item Fulfillments in Picked status were found.",
+                                fulfillmentNumber: ifNum,
+                                skipped: skippedIfArr
+                            }));
+                            return;
+                        }
 
                         //    Save signature into File Cabinet
                         log.debug("Signature value (first 100 chars)", String(signatureUrl).substring(0, 100));
@@ -170,15 +231,27 @@ define(['N/ui/serverWidget', 'N/record', 'N/log', 'N/https', 'N/file', 'N/search
                                 ifValues.custbody_bb1_jotform_signature = fileId;
                             }
 
-                            record.submitFields({
-                                type: record.Type.ITEM_FULFILLMENT,
-                                id: ifID,
-                                values: ifValues,
-                                options: {
-                                    enableSourcing: false,
-                                    ignoreMandatoryFields: true
-                                }
-                            });
+                            log.debug("Updating IF " + ifID, ifValues);
+
+                            // Field update failure should not prevent shipping
+                            try {
+                                record.submitFields({
+                                    type: record.Type.ITEM_FULFILLMENT,
+                                    id: ifID,
+                                    values: ifValues,
+                                    options: {
+                                        enableSourcing: false,
+                                        ignoreMandatoryFields: true
+                                    }
+                                });
+
+                                log.debug("IF Fields Updated", ifID);
+                            } catch (updateErr) {
+                                log.error("Error Updating Fields on Item Fulfillment " + ifID, updateErr.toString());
+                                shipErrors.push({ itemFulfillmentId: ifID, error: updateErr.message });
+                            }
+
+                            log.debug("IF " + ifID + " status before shipping", ifStatuses[ifID]);
 
                             if (ifStatuses[ifID] !== 'Shipped') {
                                 // Signature stays saved even if shipping fails
@@ -187,6 +260,9 @@ define(['N/ui/serverWidget', 'N/record', 'N/log', 'N/https', 'N/file', 'N/search
                                         type: record.Type.ITEM_FULFILLMENT,
                                         id: ifID
                                     });
+
+                                    log.debug("IF " + ifID + " shipstatus on load", ifRec.getValue({ fieldId: 'shipstatus' }));
+
                                     ifRec.setValue({ fieldId: 'shipstatus', value: 'C' });
                                     ifRec.save({
                                         enableSourcing: false,
@@ -206,6 +282,7 @@ define(['N/ui/serverWidget', 'N/record', 'N/log', 'N/https', 'N/file', 'N/search
                             success: shipErrors.length === 0,
                             itemFulfillmentId: fulfillmentID,
                             fulfillmentNumber: ifNum,
+                            skipped: skippedIfArr,
                             shipErrors: shipErrors
                         }));
                     } else {
