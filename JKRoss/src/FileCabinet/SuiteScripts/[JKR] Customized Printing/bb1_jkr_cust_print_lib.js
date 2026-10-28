@@ -9,6 +9,7 @@
  * 15-October-2026   Jared Espineli     Initial Release
  * 19-October-2026   Jared Espineli     Queue one print job per Copies (custrecord_bb1_jkr_print_copies)
  * 20-October-2026   Jared Espineli     Standard Print Type prints the transaction using Print Form
+ * 28-October-2026   Jared Espineli     Print quantity comes from the script parameter, not the setup Copies
  *
  * Copyright (c) 2026 BlueBridge One Business Solutions, All Rights Reserved
  * support@bluebridgeone.com, UK Support: +44 (0)1932 300007 SA Support: +27 (0)10 500 8674
@@ -21,13 +22,13 @@ define(['N/search', 'N/url', 'N/error',
     (search, url, error, bb1qz) => {
         const _CONFIG = {
             TRAN_PRINT_SETUP: 'custbody_bb1_jkr_doc_print_setup',
+            PARAM_PRINT_QTY: 'custscript_bb1_jkr_print_qty',
             PRINT_SETUP: {
                 REC_ID: 'customrecord_bb1_jkr_doc_print_setup',
                 DEVICE: 'custrecord_bb1_jkr_qz_device',
                 TEMPLATE_ID: 'custrecord_bb1_jkr_template_id',
                 JSON_DATA: 'custrecord_bb1_jkr_doc_json_data',
                 DOC_TYPE: 'custrecord_bb1_jkr_doc_type',
-                COPIES: 'custrecord_bb1_jkr_print_copies',
                 PRINT_TYPE: 'custrecord_bb1_jkr_print_type',
                 PRINT_FORM: 'custrecord_bb1_jkr_print_form'
             },
@@ -56,13 +57,12 @@ define(['N/search', 'N/url', 'N/error',
             let setupFields = search.lookupFields({
                 type: SETUP.REC_ID,
                 id: printSetupId,
-                columns: [SETUP.DEVICE, SETUP.TEMPLATE_ID, SETUP.JSON_DATA, SETUP.DOC_TYPE, SETUP.COPIES,
-                    SETUP.PRINT_TYPE, SETUP.PRINT_FORM]
+                columns: [SETUP.DEVICE, SETUP.TEMPLATE_ID, SETUP.JSON_DATA, SETUP.DOC_TYPE, SETUP.PRINT_TYPE,
+                    SETUP.PRINT_FORM]
             });
 
             let docType = setupFields[SETUP.DOC_TYPE];
             let printType = setupFields[SETUP.PRINT_TYPE];
-            let copies = parseInt(setupFields[SETUP.COPIES], 10);
 
             return {
                 id: printSetupId,
@@ -71,9 +71,7 @@ define(['N/search', 'N/url', 'N/error',
                 jsonData: setupFields[SETUP.JSON_DATA],
                 docTypeText: docType && docType.length ? docType[0].text : '',
                 printTypeText: printType && printType.length ? printType[0].text : '',
-                printForm: getLookupValue(setupFields[SETUP.PRINT_FORM]),
-                //blank / invalid Copies = a single print
-                copies: copies > 0 ? copies : 1
+                printForm: getLookupValue(setupFields[SETUP.PRINT_FORM])
             };
         };
 
@@ -127,7 +125,13 @@ define(['N/search', 'N/url', 'N/error',
             return jobData;
         };
 
-        LIB_FX.queuePrintJob = (printSetup, recordType, recordId) => {
+        //blank / invalid print quantity = a single print
+        LIB_FX.getPrintQty = (printQty) => {
+            let qty = parseInt(printQty, 10);
+            return qty > 0 ? qty : 1;
+        };
+
+        LIB_FX.queuePrintJob = (printSetup, recordType, recordId, printQty) => {
             if (!printSetup.deviceId) {
                 throw error.create({
                     name: 'BB1_AUTOPRINT_NO_DEVICE',
@@ -137,10 +141,11 @@ define(['N/search', 'N/url', 'N/error',
 
             let jobName = recordType + ' - ' + printSetup.docTypeText;
             let jobData = LIB_FX.buildJobData(printSetup, recordType, recordId);
-            log.debug('queuePrintJob', {deviceId: printSetup.deviceId, jobName: jobName, jobData: jobData, copies: printSetup.copies});
+            let copies = LIB_FX.getPrintQty(printQty);
+            log.debug('queuePrintJob', {deviceId: printSetup.deviceId, jobName: jobName, jobData: jobData, copies: copies});
 
             //one queued job per copy
-            for (let i = 0; i < printSetup.copies; i++) {
+            for (let i = 0; i < copies; i++) {
                 bb1qz.AddJobToQueue(Number(printSetup.deviceId), _CONFIG.QZ_PLUGIN, jobName, jobData, null);
             }
         };

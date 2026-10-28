@@ -7,6 +7,7 @@
  *
  * Date              Author              Purpose
  * 15-October-2026   Jared Espineli     Initial Release
+ * 28-October-2026   Jared Espineli     Print quantity from script parameter custscript_bb1_jkr_print_qty (blank = 1)
  *
  * Copyright (c) 2026 BlueBridge One Business Solutions, All Rights Reserved
  * support@bluebridgeone.com, UK Support: +44 (0)1932 300007 SA Support: +27 (0)10 500 8674
@@ -15,8 +16,8 @@
  * @NScriptType WorkflowActionScript
  * @NModuleScope SameAccount
  */
-define(['./bb1_jkr_cust_print_lib'],
-    (autoPrintLib) => {
+define(['N/runtime', './bb1_jkr_cust_print_lib'],
+    (runtime, autoPrintLib) => {
         const {LIB_FX, _CONFIG} = autoPrintLib;
 
         const onAction = (scriptContext) => {
@@ -40,7 +41,11 @@ define(['./bb1_jkr_cust_print_lib'],
                 let printSetup = LIB_FX.getPrintSetup(printSetupId);
                 log.debug('printSetup', printSetup);
 
-                LIB_FX.queuePrintJob(printSetup, recordType, recordId);
+                //print quantity is set per workflow action - blank defaults to 1 in the library
+                let printQty = runtime.getCurrentScript().getParameter({name: _CONFIG.PARAM_PRINT_QTY});
+                log.debug('printQty', _CONFIG.PARAM_PRINT_QTY + ': ' + printQty);
+
+                LIB_FX.queuePrintJob(printSetup, recordType, recordId, printQty);
                 LIB_FX.processQueue(recordType, recordId);
             } catch (e) {
                 //logged, not thrown - a print failure shouldn't block the saved transaction
